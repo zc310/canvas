@@ -241,11 +241,18 @@ func (w *pdfWriter) writeVal(i interface{}) {
 		if filter, ok := v.dict["Filter"].(pdfFilter); ok {
 			filters = append(filters, filter)
 		} else if filterArray, ok := v.dict["Filter"].(pdfArray); ok {
-			for i := len(filterArray) - 1; i >= 0; i-- {
-				if filter, ok := filterArray[i].(pdfFilter); ok {
+			for _, f := range slices.Backward(filterArray) {
+				if filter, ok := f.(pdfFilter); ok {
 					filters = append(filters, filter)
 				}
 			}
+		}
+
+		// DCT 图像流本身已是压缩数据，flate 只能勉强再压 ~1.7%，用低级别
+		// 即可拿到几乎相同的压缩率，同时省下大量 CPU。
+		flateLevel := zlib.DefaultCompression
+		if slices.Contains(filters, pdfFilterDCT) {
+			flateLevel = 1
 		}
 
 		b := v.stream
@@ -259,7 +266,7 @@ func (w *pdfWriter) writeVal(i interface{}) {
 				fmt.Fprintf(&b2, "~>")
 				b = b2.Bytes()
 			case pdfFilterFlate:
-				w := zlib.NewWriter(&b2)
+				w, _ := zlib.NewWriterLevel(&b2, flateLevel)
 				w.Write(b)
 				w.Close()
 				b = b2.Bytes()
