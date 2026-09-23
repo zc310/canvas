@@ -539,7 +539,7 @@ func (c *Context) Fill() {
 		c.Style.Stroke = Paint{}
 		c.DrawPath(0.0, 0.0, c.path)
 		c.Style.Stroke = stroke
-		c.path = &Path{}
+		c.path.Reset()
 	}
 }
 
@@ -550,7 +550,7 @@ func (c *Context) Stroke() {
 		c.Style.Fill = Paint{}
 		c.DrawPath(0.0, 0.0, c.path)
 		c.Style.Fill = fill
-		c.path = &Path{}
+		c.path.Reset()
 	}
 }
 
@@ -558,7 +558,7 @@ func (c *Context) Stroke() {
 func (c *Context) FillStroke() {
 	if 0 < len(c.path.d) {
 		c.DrawPath(0.0, 0.0, c.path)
-		c.path = &Path{}
+		c.path.Reset()
 	}
 }
 
@@ -850,7 +850,7 @@ func (c *Canvas) RenderTo(r Renderer) {
 
 // RenderViewTo transforms and renders the accumulated canvas drawing operations to another renderer.
 func (c *Canvas) RenderViewTo(r Renderer, view Matrix) {
-	zindices := []int{}
+	zindices := make([]int, 0, len(c.layers))
 	for zindex := range c.layers {
 		zindices = append(zindices, zindex)
 	}

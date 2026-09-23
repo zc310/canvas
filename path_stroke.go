@@ -446,7 +446,7 @@ type pathStrokeState struct {
 func (p *Path) offset(halfWidth float64, cr Capper, jr Joiner, strokeOpen bool, tolerance float64) (*Path, *Path) {
 	// only non-empty paths are evaluated
 	closed := false
-	states := []pathStrokeState{}
+	states := make([]pathStrokeState, 0, p.Len())
 	var start, end Point
 	for i := 0; i < len(p.d); {
 		cmd := p.d[i]
@@ -540,6 +540,8 @@ func (p *Path) offset(halfWidth float64, cr Capper, jr Joiner, strokeOpen bool, 
 	}
 
 	rhs, lhs := &Path{}, &Path{}
+	rhs.d = make([]float64, 0, 4+4*len(states)) // preallocate one line per state
+	lhs.d = make([]float64, 0, 4+4*len(states))
 	rStart := states[0].p0.Add(states[0].n0)
 	lStart := states[0].p0.Sub(states[0].n0)
 	rhs.MoveTo(rStart.X, rStart.Y)
@@ -636,7 +638,7 @@ func (p *Path) Offset(w float64, tolerance float64) *Path {
 		return p
 	}
 
-	q := &Path{}
+	q := &Path{d: make([]float64, 0, 4*p.Len())}
 	if !FastStroke {
 		// make sure all filling paths are CCW
 		p = p.Settle(NonZero) // TODO: set/check boolean if path is settled to avoid costly and unnecessary settling
@@ -663,7 +665,7 @@ func (p *Path) Stroke(w float64, cr Capper, jr Joiner, tolerance float64) *Path 
 		jr = MiterJoin
 	}
 
-	q := &Path{}
+	q := &Path{d: make([]float64, 0, 4*p.Len())}
 	halfWidth := math.Abs(w) / 2.0
 	for _, pi := range p.Split() {
 		rhs, lhs := pi.offset(halfWidth, cr, jr, true, tolerance)

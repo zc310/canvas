@@ -378,18 +378,21 @@ func intersectionLineQuad(zs Intersections, l0, l1, p0, p1, p2 Point) Intersecti
 	b := A.Dot(p1.Sub(p0).Mul(2.0))
 	c := A.Dot(p0) - bias
 
-	roots := []float64{}
+	var roots [2]float64
+	n := 0
 	r0, r1 := solveQuadraticFormula(a, b, c)
 	if !math.IsNaN(r0) {
-		roots = append(roots, r0)
+		roots[n] = r0
+		n++
 		if !math.IsNaN(r1) {
-			roots = append(roots, r1)
+			roots[n] = r1
+			n++
 		}
 	}
 
 	dira := l1.Sub(l0).Angle()
 	horizontal := math.Abs(l1.Y-l0.Y) <= math.Abs(l1.X-l0.X)
-	for _, root := range roots {
+	for _, root := range roots[:n] {
 		if Interval(root, 0.0, 1.0) {
 			var s float64
 			pos := quadraticBezierPos(p0, p1, p2, root)
@@ -434,21 +437,25 @@ func intersectionLineCube(zs Intersections, l0, l1, p0, p1, p2, p3 Point) Inters
 	c := A.Dot(p1.Mul(3.0).Sub(p0.Mul(3.0)))
 	d := A.Dot(p0) - bias
 
-	roots := []float64{}
+	var roots [3]float64
+	n := 0
 	r0, r1, r2 := solveCubicFormula(a, b, c, d)
 	if !math.IsNaN(r0) {
-		roots = append(roots, r0)
+		roots[n] = r0
+		n++
 		if !math.IsNaN(r1) {
-			roots = append(roots, r1)
+			roots[n] = r1
+			n++
 			if !math.IsNaN(r2) {
-				roots = append(roots, r2)
+				roots[n] = r2
+				n++
 			}
 		}
 	}
 
 	dira := l1.Sub(l0).Angle()
 	horizontal := math.Abs(l1.Y-l0.Y) <= math.Abs(l1.X-l0.X)
-	for _, root := range roots {
+	for _, root := range roots[:n] {
 		if Interval(root, 0.0, 1.0) {
 			var s float64
 			pos := cubicBezierPos(p0, p1, p2, p3, root)
@@ -550,38 +557,45 @@ func intersectionLineCircle(zs Intersections, l0, l1, center Point, radius, thet
 	c := diff.Dot(diff) - radius*radius
 
 	// find solutions for t ∈ [0,1], the parameter along the line's path
-	roots := []float64{}
+	var roots [2]float64
+	n := 0
 	r0, r1 := solveQuadraticFormula(a, b, c)
 	if !math.IsNaN(r0) {
-		roots = append(roots, r0)
+		roots[n] = r0
+		n++
 		if !math.IsNaN(r1) && !Equal(r0, r1) {
-			roots = append(roots, r1)
+			roots[n] = r1
+			n++
 		}
 	}
 
 	// handle common cases with endpoints to avoid numerical issues
 	// snap closest root to path's start or end
-	if 0 < len(roots) {
+	if 0 < n {
 		if pos := l0.Sub(center); Equal(pos.Length(), radius) {
-			if len(roots) == 1 || math.Abs(roots[0]) < math.Abs(roots[1]) {
+			if n == 1 || math.Abs(roots[0]) < math.Abs(roots[1]) {
 				roots[0] = 0.0
+				n = max(n, 1)
 			} else {
 				roots[1] = 0.0
+				n = max(n, 2)
 			}
 		}
 		if pos := l1.Sub(center); Equal(pos.Length(), radius) {
-			if len(roots) == 1 || math.Abs(roots[0]-length) < math.Abs(roots[1]-length) {
+			if n == 1 || math.Abs(roots[0]-length) < math.Abs(roots[1]-length) {
 				roots[0] = length
+				n = max(n, 1)
 			} else {
 				roots[1] = length
+				n = max(n, 2)
 			}
 		}
 	}
 
 	// add intersections
 	dira := dir.Angle()
-	tangent := len(roots) == 1
-	for _, root := range roots {
+	tangent := n == 1
+	for _, root := range roots[:n] {
 		pos := diff.Add(dir.Mul(root / length))
 		angle := math.Atan2(pos.Y*radius, pos.X*radius)
 		if Interval(root, 0.0, length) && angleBetween(angle, theta0, theta1) {

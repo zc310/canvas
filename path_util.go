@@ -716,10 +716,11 @@ func xmonotoneQuadraticBezier(p0, p1, p2 Point) *Path {
 	return p
 }
 
-func flattenQuadraticBezier(p0, p1, p2 Point, tolerance float64) *Path {
+// flattenQuadraticBezierTo flattens the quadratic Bézier curve into path p as a MoveTo followed by line segments.
+// p0 is the start point, p1 the control point and p2 the end point. With flatness defined as the maximum error from the original curve.
+func flattenQuadraticBezierTo(p *Path, p0, p1, p2 Point, tolerance float64) {
 	// see Flat, precise flattening of cubic Bézier path and offset curves, by T.F. Hain et al., 2005,  https://www.sciencedirect.com/science/article/pii/S0097849305001287
 	t := 0.0
-	p := &Path{}
 	p.MoveTo(p0.X, p0.Y)
 	for t < 1.0 {
 		D := p1.Sub(p0)
@@ -740,6 +741,11 @@ func flattenQuadraticBezier(p0, p1, p2 Point, tolerance float64) *Path {
 		p.LineTo(p0.X, p0.Y)
 	}
 	p.LineTo(p2.X, p2.Y)
+}
+
+func flattenQuadraticBezier(p0, p1, p2 Point, tolerance float64) *Path {
+	p := &Path{}
+	flattenQuadraticBezierTo(p, p0, p1, p2, tolerance)
 	return p
 }
 
@@ -769,6 +775,12 @@ func xmonotoneCubicBezier(p0, p1, p2, p3 Point) *Path {
 	}
 	p.CubeTo(p1.X, p1.Y, p2.X, p2.Y, p3.X, p3.Y)
 	return p
+}
+
+// flattenCubicBezierTo flattens the cubic Bézier curve into path p as a MoveTo followed by line segments.
+// p0, p1, p2, p3 are the start point, two control points and the end point respectively. With flatness defined as the maximum error from the original curve.
+func flattenCubicBezierTo(p *Path, p0, p1, p2, p3 Point, tolerance float64) {
+	strokeCubicBezierIn(p, p0, p1, p2, p3, 0.0, tolerance)
 }
 
 func flattenCubicBezier(p0, p1, p2, p3 Point, tolerance float64) *Path {
@@ -881,11 +893,11 @@ func findInflectionPointRangeCubicBezier(p0, p1, p2, p3 Point, t, tolerance floa
 // see Flat, precise flattening of cubic Bézier path and offset curves, by T.F. Hain et al., 2005,  https://www.sciencedirect.com/science/article/pii/S0097849305001287
 // see https://github.com/Manishearth/stylo-flat/blob/master/gfx/2d/Path.cpp for an example implementation
 // or https://docs.rs/crate/lyon_bezier/0.4.1/source/src/flatten_cubic.rs
+// strokeCubicBezierIn flattens the cubic Bézier curve (offset by d) into path p, leaving p as a MoveTo followed by line segments.
 // p0, p1, p2, p3 are the start point, two control points and the end point respectively. With flatness defined as the maximum error from the orinal curve, and d the half width of the curve used for stroking (positive is to the right).
-func strokeCubicBezier(p0, p1, p2, p3 Point, d, tolerance float64) *Path {
+func strokeCubicBezierIn(p *Path, p0, p1, p2, p3 Point, d, tolerance float64) {
 	tolerance = math.Max(tolerance, Epsilon) // prevent infinite loop if user sets tolerance to zero
 
-	p := &Path{}
 	start := p0.Add(cubicBezierNormal(p0, p1, p2, p3, 0.0, d))
 	p.MoveTo(start.X, start.Y)
 
@@ -895,7 +907,7 @@ func strokeCubicBezier(p0, p1, p2, p3 Point, d, tolerance float64) *Path {
 	if math.IsNaN(t1) && math.IsNaN(t2) {
 		// There are no inflection points or cusps, approximate linearly by subdivision.
 		flattenSmoothCubicBezier(p, p0, p1, p2, p3, d, tolerance)
-		return p
+		return
 	}
 
 	// t1min <= t1max; with 0 <= t1max and t1min <= 1
@@ -906,7 +918,7 @@ func strokeCubicBezier(p0, p1, p2, p3 Point, d, tolerance float64) *Path {
 	if math.IsNaN(t2) && t1min <= 0.0 && 1.0 <= t1max {
 		// There is no second inflection point, and the first inflection point can be entirely approximated linearly.
 		addCubicBezierLine(p, p0, p1, p2, p3, 1.0, d)
-		return p
+		return
 	}
 
 	if 0.0 < t1min {
@@ -922,12 +934,12 @@ func strokeCubicBezier(p0, p1, p2, p3 Point, d, tolerance float64) *Path {
 		if 1.0 <= t2min {
 			// No t2 present, approximate the rest linearly by subdivision
 			flattenSmoothCubicBezier(p, q0, q1, q2, q3, d, tolerance)
-			return p
+			return
 		}
 	} else if 1.0 <= t2min {
 		// No t2 present and t1max is past the end of the curve, approximate linearly
 		addCubicBezierLine(p, p0, p1, p2, p3, 1.0, d)
-		return p
+		return
 	}
 
 	// t1 and t2 exist and ranges might overlap
@@ -954,5 +966,11 @@ func strokeCubicBezier(p0, p1, p2, p3 Point, d, tolerance float64) *Path {
 		// t2max extends beyond 1
 		addCubicBezierLine(p, p0, p1, p2, p3, 1.0, d)
 	}
+}
+
+// strokeCubicBezier returns a new path consisting of a MoveTo followed by the flattened line segments of the cubic Bézier curve offset by d (positive is to the right).
+func strokeCubicBezier(p0, p1, p2, p3 Point, d, tolerance float64) *Path {
+	p := &Path{}
+	strokeCubicBezierIn(p, p0, p1, p2, p3, d, tolerance)
 	return p
 }

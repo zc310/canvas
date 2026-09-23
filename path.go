@@ -2470,6 +2470,7 @@ func (p *Path) ToVectorRasterizer(ras *vector.Rasterizer, resolution Resolution)
 	dpmm := resolution.DPMM()
 	tolerance := PixelTolerance / dpmm // tolerance of 1/10 of a pixel
 	dy := float64(ras.Bounds().Size().Y)
+	var q *Path // reused buffer for flattened curves
 	for i := 0; i < len(p.d); {
 		cmd := p.d[i]
 		switch cmd {
@@ -2479,7 +2480,10 @@ func (p *Path) ToVectorRasterizer(ras *vector.Rasterizer, resolution Resolution)
 			ras.LineTo(float32(p.d[i+1]*dpmm), float32(dy-p.d[i+2]*dpmm))
 		case QuadToCmd, CubeToCmd, ArcToCmd:
 			// flatten
-			var q *Path
+			if q == nil {
+				q = &Path{d: make([]float64, 0, 32)}
+			}
+			q.d = q.d[:0]
 			var start Point
 			if 0 < i {
 				start = Point{p.d[i-3], p.d[i-2]}
@@ -2487,12 +2491,12 @@ func (p *Path) ToVectorRasterizer(ras *vector.Rasterizer, resolution Resolution)
 			if cmd == QuadToCmd {
 				cp := Point{p.d[i+1], p.d[i+2]}
 				end := Point{p.d[i+3], p.d[i+4]}
-				q = flattenQuadraticBezier(start, cp, end, tolerance)
+				flattenQuadraticBezierTo(q, start, cp, end, tolerance)
 			} else if cmd == CubeToCmd {
 				cp1 := Point{p.d[i+1], p.d[i+2]}
 				cp2 := Point{p.d[i+3], p.d[i+4]}
 				end := Point{p.d[i+5], p.d[i+6]}
-				q = flattenCubicBezier(start, cp1, cp2, end, tolerance)
+				flattenCubicBezierTo(q, start, cp1, cp2, end, tolerance)
 			} else {
 				rx, ry, phi := p.d[i+1], p.d[i+2], p.d[i+3]
 				large, sweep := toArcFlags(p.d[i+4])
@@ -2527,6 +2531,7 @@ func fixedPoint26_6(x, y float64) fixed.Point26_6 {
 func (p *Path) ToScanxScanner(ras *scanx.Scanner, dy float64, resolution Resolution) {
 	dpmm := resolution.DPMM()
 	tolerance := PixelTolerance / dpmm // tolerance of 1/10 of a pixel
+	var q *Path                        // reused buffer for flattened curves
 	for i := 0; i < len(p.d); {
 		cmd := p.d[i]
 		switch cmd {
@@ -2536,7 +2541,10 @@ func (p *Path) ToScanxScanner(ras *scanx.Scanner, dy float64, resolution Resolut
 			ras.Line(fixedPoint26_6(p.d[i+1]*dpmm, dy-p.d[i+2]*dpmm))
 		case QuadToCmd, CubeToCmd, ArcToCmd:
 			// flatten
-			var q *Path
+			if q == nil {
+				q = &Path{d: make([]float64, 0, 32)}
+			}
+			q.d = q.d[:0]
 			var start Point
 			if 0 < i {
 				start = Point{p.d[i-3], p.d[i-2]}
@@ -2544,12 +2552,12 @@ func (p *Path) ToScanxScanner(ras *scanx.Scanner, dy float64, resolution Resolut
 			if cmd == QuadToCmd {
 				cp := Point{p.d[i+1], p.d[i+2]}
 				end := Point{p.d[i+3], p.d[i+4]}
-				q = flattenQuadraticBezier(start, cp, end, tolerance)
+				flattenQuadraticBezierTo(q, start, cp, end, tolerance)
 			} else if cmd == CubeToCmd {
 				cp1 := Point{p.d[i+1], p.d[i+2]}
 				cp2 := Point{p.d[i+3], p.d[i+4]}
 				end := Point{p.d[i+5], p.d[i+6]}
-				q = flattenCubicBezier(start, cp1, cp2, end, tolerance)
+				flattenCubicBezierTo(q, start, cp1, cp2, end, tolerance)
 			} else {
 				rx, ry, phi := p.d[i+1], p.d[i+2], p.d[i+3]
 				large, sweep := toArcFlags(p.d[i+4])

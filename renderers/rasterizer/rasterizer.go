@@ -72,6 +72,19 @@ func (r *Rasterizer) Close() {
 	}
 }
 
+// Reset clears the image and accumulated scan cells so that the rasterizer can be reused for the next frame. It keeps the allocated buffers for the image and scan cells, avoiding per-frame allocations such as image.NewRGBA and scan cell lookup on repeated rendering (e.g. animations). Note that Close should still be called once all frames have been rendered.
+func (r *Rasterizer) Reset() {
+	// clear the image
+	if img, ok := r.Image.(*image.RGBA); ok {
+		clear(img.Pix)
+	} else {
+		draw.Draw(r.Image, r.Image.Bounds(), image.Transparent, image.Point{}, draw.Src)
+	}
+
+	// cancel previous scans but reuse the cell buffers
+	r.scanner.Clear()
+}
+
 // SetOp sets the drawing operation. Either draw.Src or draw.Over.
 func (r *Rasterizer) SetOp(op draw.Op) {
 	r.spanner.Op = op

@@ -3,30 +3,30 @@ module github.com/tdewolff/canvas
 go 1.26.0
 
 require (
-	fyne.io/fyne/v2 v2.8.0
+	fyne.io/fyne/v2 v2.8.1
 	gioui.org v0.10.2
 	github.com/ByteArena/poly2tri-go v0.0.0-20170716161910-d102ad91854f
 	github.com/Kagami/go-avif v0.1.0
 	github.com/benoitkugler/textprocessing v0.0.6
 	github.com/go-fonts/latin-modern v0.3.3
 	github.com/go-gl/gl v0.0.0-20260331235117-4566fea9a276
-	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20260802143932-8fa725040a18
-	github.com/go-text/typesetting v0.3.4
+	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20260823155953-d41da22a9587
+	github.com/go-text/typesetting v0.3.5
 	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0
 	github.com/kolesa-team/go-webp v1.0.5
 	github.com/paulmach/orb v0.13.0
 	github.com/paulmach/osm v0.9.0
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
 	github.com/srwiley/scanx v0.0.0-20190309010443-e94503791388
-	github.com/tdewolff/argp v0.0.0-20260809175504-e6e95971d4fb
-	github.com/tdewolff/font v0.0.0-20260822205238-d0d2f004b117
+	github.com/tdewolff/argp v0.0.0-20260913163208-9b59948ed567
+	github.com/tdewolff/font v0.0.0-20260913163313-54f98bb59ee6
 	github.com/tdewolff/minify/v2 v2.24.17
 	github.com/tdewolff/parse/v2 v2.8.16
 	github.com/tdewolff/test v1.0.12
 	github.com/wcharczuk/go-chart/v2 v2.1.2
-	github.com/wroge/wgs84/v2 v2.0.0-alpha.19
-	golang.org/x/image v0.45.0
-	golang.org/x/text v0.41.0
+	github.com/wroge/wgs84/v2 v2.0.0-alpha.20
+	golang.org/x/image v0.46.0
+	golang.org/x/text v0.42.0
 	gonum.org/v1/plot v0.17.0
 )
 
@@ -34,7 +34,7 @@ require (
 	codeberg.org/go-fonts/liberation v0.6.0 // indirect
 	codeberg.org/go-latex/latex v0.3.0 // indirect
 	codeberg.org/go-pdf/fpdf v0.12.0 // indirect
-	fyne.io/systray v1.12.2 // indirect
+	fyne.io/systray v1.12.3-0.20260810170012-af4e8e793ec4 // indirect
 	gioui.org/shader v1.0.9 // indirect
 	git.sr.ht/~sbinet/gg v0.8.0 // indirect
 	github.com/BurntSushi/freetype-go v0.0.0-20160129220410-b763ddbfe298 // indirect
@@ -89,8 +89,8 @@ require (
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c // indirect
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
 	github.com/stretchr/testify v1.12.1 // indirect
-	github.com/yuin/goldmark v1.8.5
-	golang.org/x/net v0.58.0
-	golang.org/x/sys v0.47.0 // indirect
+	github.com/yuin/goldmark v1.8.6
+	golang.org/x/net v0.59.0
+	golang.org/x/sys v0.48.0 // indirect
 	star-tex.org/x/tex v0.7.1
 )

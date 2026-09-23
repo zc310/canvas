@@ -2327,7 +2327,7 @@ func bentleyOttmann(ps, qs Paths, op pathOp, fillRule FillRule) Paths {
 			}
 
 			first := cur
-			R := &Path{}
+			R := &Path{d: make([]float64, 0, 4+4*len(square.Events))}
 			R.MoveTo(cur.X, cur.Y)
 			cur.index = index
 			cur.resultWindings = windings
