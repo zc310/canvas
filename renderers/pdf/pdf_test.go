@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"image"
+	"image/color"
 	"io"
 	"os"
 	"strings"
@@ -61,6 +62,48 @@ func TestPDFPath(t *testing.T) {
 	pdf.SetLineJoin(canvas.RoundJoin)
 	pdf.SetDashes(2.0, []float64{1.0, 2.0, 3.0})
 	test.String(t, pdf.String(), " 2.8346457 0 0 2.8346457 0 0 cm /A0 gs 1 0 0 rg /A1 gs 0 0 1 RG 5 w 1 J 1 j [1 2 3 1 2 3] 2 d")
+}
+
+func TestPDFPatternDedup(t *testing.T) {
+	buf := &bytes.Buffer{}
+	pdf := newPDFWriter(buf).NewPage(210.0, 297.0)
+
+	grad := canvas.NewLinearGradient(canvas.Point{0, 0}, canvas.Point{10, 0})
+	grad.Grad = canvas.Grad{
+		{Offset: 0.0, Color: color.RGBA{R: 255, A: 255}},
+		{Offset: 1.0, Color: color.RGBA{B: 255, A: 255}},
+	}
+	m := canvas.Identity
+
+	first := pdf.getPattern(grad, m)
+	if second := pdf.getPattern(grad, m); second != first {
+		t.Fatalf("same gradient should reuse pattern: %v and %v", first, second)
+	}
+
+	// 内容相同但对象不同的渐变也必须复用同一 pattern 资源。
+	equal := canvas.NewLinearGradient(canvas.Point{0, 0}, canvas.Point{10, 0})
+	equal.Grad = canvas.Grad{
+		{Offset: 0.0, Color: color.RGBA{R: 255, A: 255}},
+		{Offset: 1.0, Color: color.RGBA{B: 255, A: 255}},
+	}
+	if name := pdf.getPattern(equal, m); name != first {
+		t.Fatalf("equal gradient should reuse pattern: %v and %v", first, name)
+	}
+
+	// 不同矩阵必须产生不同的 pattern。
+	if name := pdf.getPattern(grad, canvas.Identity.Scale(2, 2)); name == first {
+		t.Fatal("different matrix should not reuse pattern")
+	}
+
+	// 不同色标必须产生不同的 pattern。
+	different := canvas.NewLinearGradient(canvas.Point{0, 0}, canvas.Point{10, 0})
+	different.Grad = canvas.Grad{
+		{Offset: 0.0, Color: color.RGBA{G: 255, A: 255}},
+		{Offset: 1.0, Color: color.RGBA{B: 255, A: 255}},
+	}
+	if name := pdf.getPattern(different, m); name == first {
+		t.Fatal("different gradient stops should not reuse pattern")
+	}
 }
 
 const fontDir = "../../resources/"

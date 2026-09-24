@@ -856,6 +856,7 @@ type pdfPageWriter struct {
 	pdf           *pdfWriter
 	width, height float64
 	resources     pdfDict
+	patterns      map[pdfPatternKey]pdfName
 	annots        pdfArray
 
 	graphicsStates map[float64]pdfName
@@ -889,6 +890,7 @@ func (w *pdfWriter) NewPage(width, height float64) *pdfPageWriter {
 		width:          width,
 		height:         height,
 		resources:      pdfDict{},
+		patterns:       map[pdfPatternKey]pdfName{},
 		graphicsStates: map[float64]pdfName{},
 		alpha:          1.0,
 		fill:           canvas.Paint{Color: canvas.Black},
@@ -1587,8 +1589,51 @@ func (w *pdfPageWriter) getOpacityGS(a float64) pdfName {
 	return name
 }
 
+// pdfPatternKey 是渐变 pattern 的去重键：只由渐变类型、几何、色标和变换矩阵
+// 决定，全部为可比较值类型，避免每次填充都对嵌套 pdfDict 做 reflect.DeepEqual。
+type pdfPatternKey struct {
+	kind   int
+	geom   [6]float64
+	matrix [6]float64
+	stops  [8]canvas.Stop
+	nStops int
+}
+
+// pdfPatternKeyOf 从渐变和矩阵构造去重键；色标过多等无法用定长键表示时返回 false。
+func pdfPatternKeyOf(gradient canvas.Gradient, m canvas.Matrix) (pdfPatternKey, bool) {
+	key := pdfPatternKey{
+		matrix: [6]float64{m[0][0], m[1][0], m[0][1], m[1][1], m[0][2], m[1][2]},
+	}
+	var grad canvas.Grad
+	switch g := gradient.(type) {
+	case *canvas.LinearGradient:
+		key.kind = 2
+		key.geom = [6]float64{g.Start.X, g.Start.Y, g.End.X, g.End.Y, 0, 0}
+		grad = g.Grad
+	case *canvas.RadialGradient:
+		key.kind = 3
+		key.geom = [6]float64{g.C0.X, g.C0.Y, g.R0, g.C1.X, g.C1.Y, g.R1}
+		grad = g.Grad
+	default:
+		return pdfPatternKey{}, false
+	}
+	if len(grad) > len(key.stops) {
+		return pdfPatternKey{}, false
+	}
+	key.nStops = len(grad)
+	copy(key.stops[:], grad)
+	return key, true
+}
+
 func (w *pdfPageWriter) getPattern(gradient canvas.Gradient, m canvas.Matrix) pdfName {
 	// TODO: support patterns/gradients with alpha channel
+	key, keyed := pdfPatternKeyOf(gradient, m)
+	if keyed {
+		if name, ok := w.patterns[key]; ok {
+			return name
+		}
+	}
+
 	shading := pdfDict{
 		"ColorSpace": pdfName("DeviceRGB"),
 	}
@@ -1612,13 +1657,19 @@ func (w *pdfPageWriter) getPattern(gradient canvas.Gradient, m canvas.Matrix) pd
 	if _, ok := w.resources["Pattern"]; !ok {
 		w.resources["Pattern"] = pdfDict{}
 	}
-	for name, pat := range w.resources["Pattern"].(pdfDict) {
-		if reflect.DeepEqual(pat, pattern) {
-			return name
+	if !keyed {
+		// 无法构造定长键时退回内容比较，保证去重语义不变。
+		for name, pat := range w.resources["Pattern"].(pdfDict) {
+			if reflect.DeepEqual(pat, pattern) {
+				return name
+			}
 		}
 	}
 	name := pdfName(fmt.Sprintf("P%d", len(w.resources["Pattern"].(pdfDict))))
 	w.resources["Pattern"].(pdfDict)[name] = pattern
+	if keyed {
+		w.patterns[key] = name
+	}
 	return name
 }
 
