@@ -2,9 +2,11 @@ package pdf
 
 import (
 	"bytes"
+	"compress/zlib"
 	"fmt"
 	"image"
 	"image/color"
+	"image/png"
 	"io"
 	"os"
 	"strings"
@@ -161,6 +163,68 @@ func TestPDFImage(t *testing.T) {
 	pdf := newPDFWriter(buf).NewPage(210.0, 297.0)
 	pdf.DrawImage(img, cimage.Lossless, canvas.Identity)
 	test.String(t, pdf.String(), " 2.8346457 0 0 2.8346457 0 0 cm q 0 0 2 2 re W n 0 0 m 0 2 l 2 2 l 2 0 l h W n 2 0 0 2 0 0 cm /Im0 Do Q")
+}
+
+// A PNG image stream is already zlib data: the PDF should declare FlateDecode and write
+// the bytes verbatim. Compressing it again leaves the decoder with the inner zlib
+// stream and the image renders blank (the QR code in zsbk.ofd hit this).
+func TestPDFPNGImageStreamIsSingleCompressed(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	for y := 0; y < 4; y++ {
+		for x := 0; x < 4; x++ {
+			img.Set(x, y, color.RGBA{R: uint8(x * 60), G: uint8(y * 60), B: 0, A: 255})
+		}
+	}
+	var pngBuf bytes.Buffer
+	if err := png.Encode(&pngBuf, img); err != nil {
+		t.Fatal(err)
+	}
+	cimg := &cimage.Image{
+		Bytes:    pngBuf.Bytes(),
+		Mimetype: "image/png",
+		Config:   image.Config{ColorModel: color.RGBAModel, Width: 4, Height: 4},
+	}
+
+	buf := &bytes.Buffer{}
+	pdf := newPDFWriter(buf)
+	pdf.NewPage(50, 50).DrawImage(cimg, cimage.Lossless, canvas.Identity)
+	if err := pdf.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.Bytes()
+
+	marker := []byte("/Predictor 15")
+	at := bytes.Index(out, marker)
+	if at < 0 {
+		t.Fatalf("PNG passthrough image dict (Predictor 15) not found")
+	}
+	// When Filter is an array, DecodeParms must be an array too; otherwise readers
+	// ignore Predictor and the image is skewed.
+	if !bytes.Contains(out, []byte("/DecodeParms[<<")) {
+		t.Fatalf("DecodeParms must be an array when Filter is an array")
+	}
+	start := bytes.Index(out[at:], []byte("stream\n"))
+	if start < 0 {
+		t.Fatal("image stream start not found")
+	}
+	start += at + len("stream\n")
+	end := bytes.Index(out[start:], []byte("\nendstream"))
+	if end < 0 {
+		t.Fatal("image stream end not found")
+	}
+	reader, err := zlib.NewReader(bytes.NewReader(out[start : start+end]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A single inflate must yield exactly the PNG filtered scanlines: height*(1+width*3).
+	want := 4 * (1 + 4*3)
+	if len(decoded) != want {
+		t.Fatalf("inflated image stream length = %d, want %d (looks double-compressed)", len(decoded), want)
+	}
 }
 
 func TestPDFMultipage(t *testing.T) {

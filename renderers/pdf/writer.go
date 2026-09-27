@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/ascii85"
+	"encoding/binary"
 	"fmt"
 	"hash/crc32"
 	"image"
@@ -161,6 +162,9 @@ const (
 	pdfFilterASCII85 pdfFilter = "ASCII85Decode"
 	pdfFilterFlate   pdfFilter = "FlateDecode"
 	pdfFilterDCT     pdfFilter = "DCTDecode"
+	// pdfFilterStoredFlate marks a stream that already holds zlib data: it is written
+	// verbatim while the dict still declares FlateDecode.
+	pdfFilterStoredFlate pdfFilter = "StoredFlate"
 )
 
 func pdfValContinuesName(val any) bool {
@@ -247,6 +251,20 @@ func (w *pdfWriter) writeVal(i interface{}) {
 				}
 			}
 		}
+		// Rewrite StoredFlate to FlateDecode in the dict (the data is already zlib), but
+		// keep StoredFlate in the encoder filter list so the switch below passes the data
+		// through untouched. Turning it into Flate here would compress the passthrough
+		// data a second time and the decoder would only recover the inner zlib stream,
+		// leaving the image blank.
+		if named, ok := v.dict["Filter"].(pdfFilter); ok && named == pdfFilterStoredFlate {
+			v.dict["Filter"] = pdfFilterFlate
+		} else if filterArray, ok := v.dict["Filter"].(pdfArray); ok {
+			for i, f := range filterArray {
+				if f == pdfFilterStoredFlate {
+					filterArray[i] = pdfFilterFlate
+				}
+			}
+		}
 
 		// DCT 图像流本身已是压缩数据，flate 只能勉强再压 ~1.7%，用低级别
 		// 即可拿到几乎相同的压缩率，同时省下大量 CPU。
@@ -269,6 +287,9 @@ func (w *pdfWriter) writeVal(i interface{}) {
 				w, _ := zlib.NewWriterLevel(&b2, flateLevel)
 				w.Write(b)
 				w.Close()
+				b = b2.Bytes()
+			case pdfFilterStoredFlate:
+				b2.Write(b)
 				b = b2.Bytes()
 			default:
 				// assume already in the right format
@@ -1402,15 +1423,43 @@ func (w *pdfPageWriter) embedImage(img image.Image, enc cimage.ImageEncoding) pd
 		filters = append(filters, pdfFilterFlate)
 		filtersMask = append(filtersMask, pdfFilterFlate)
 	}
+	if cimg, ok := img.(*cimage.Image); ok && cimg.Mimetype == "image/png" && cimg.Mask == nil {
+		if raw, info, extracted := pngImageStream(cimg.Bytes); extracted {
+			stream = raw
+			filters = pdfArray{pdfFilterStoredFlate}
+			dict := pdfDict{
+				"Type":             pdfName("XObject"),
+				"Subtype":          pdfName("Image"),
+				"Width":            info.width,
+				"Height":           info.height,
+				"ColorSpace":       pdfName(info.colorSpace),
+				"BitsPerComponent": info.bits,
+				"Interpolate":      true,
+				"Filter":           filters,
+				// When Filter is an array, DecodeParms must be an array too (one entry per
+				// filter). Otherwise readers ignore Predictor and treat the PNG per-row
+				// filter bytes as pixels, shifting every row and shearing the image.
+				"DecodeParms": pdfArray{pdfDict{
+					"Predictor":        15,
+					"Colors":           info.colors,
+					"BitsPerComponent": info.bits,
+					"Columns":          info.width,
+				}},
+			}
+			ref := w.pdf.writeObject(pdfStream{dict: dict, stream: stream})
+			w.pdf.images[img] = ref
+			return ref
+		}
+	}
 	if cimg, ok := img.(*cimage.Image); ok && cimg.Mimetype == "image/jpeg" {
 		// image is already lossy
 		stream = cimg.Bytes
-		filters = append(filters, pdfFilterDCT)
+		filters = pdfArray{pdfFilterDCT}
 		if cimg.Mask != nil {
 			if cimg.Mask.Mimetype == "image/jpeg" {
 				// mask as well
 				streamMask = cimg.Mask.Bytes
-				filtersMask = append(filtersMask, pdfFilterDCT)
+				filtersMask = pdfArray{pdfFilterDCT}
 			} else if enc == cimage.Lossy {
 				hasMask := false
 				sp := img.Bounds().Min // starting point
@@ -1431,7 +1480,7 @@ func (w *pdfPageWriter) embedImage(img image.Image, enc cimage.ImageEncoding) pd
 					var bufMask bytes.Buffer
 					_ = jpeg.Encode(&bufMask, mask, nil)
 					streamMask = bufMask.Bytes()
-					filtersMask = append(filtersMask, pdfFilterDCT)
+					filtersMask = pdfArray{pdfFilterDCT}
 				}
 			} else {
 				hasMask := false
@@ -1469,7 +1518,7 @@ func (w *pdfPageWriter) embedImage(img image.Image, enc cimage.ImageEncoding) pd
 			var buf bytes.Buffer
 			_ = jpeg.Encode(&buf, img, nil)
 			stream = buf.Bytes()
-			filters = append(filters, pdfFilterDCT)
+			filters = pdfArray{pdfFilterDCT}
 		} else {
 			hasMask := false
 			sp := img.Bounds().Min // starting point
@@ -1489,13 +1538,13 @@ func (w *pdfPageWriter) embedImage(img image.Image, enc cimage.ImageEncoding) pd
 			var buf bytes.Buffer
 			_ = jpeg.Encode(&buf, img, nil)
 			stream = buf.Bytes()
-			filters = append(filters, pdfFilterDCT)
+			filters = pdfArray{pdfFilterDCT}
 
 			if hasMask {
 				var bufMask bytes.Buffer
 				_ = jpeg.Encode(&bufMask, mask, nil)
 				streamMask = bufMask.Bytes()
-				filtersMask = append(filtersMask, pdfFilterDCT)
+				filtersMask = pdfArray{pdfFilterDCT}
 			}
 		}
 	} else if opaqueImg, ok := img.(interface{ Opaque() bool }); ok && opaqueImg.Opaque() {
@@ -1570,6 +1619,68 @@ func (w *pdfPageWriter) embedImage(img image.Image, enc cimage.ImageEncoding) pd
 	})
 	w.pdf.images[img] = ref
 	return ref
+}
+
+type pngStreamInfo struct {
+	width, height int
+	bits          int
+	colors        int
+	colorSpace    string
+}
+
+// pngImageStream extracts the compressed pixel stream from raw PNG bytes. It only
+// accepts non-transparent, non-interlaced 8-bit grayscale and truecolor images so the
+// IDAT chunks can be used verbatim as a FlateDecode image stream.
+func pngImageStream(data []byte) ([]byte, pngStreamInfo, bool) {
+	var info pngStreamInfo
+	if len(data) < 8 || !bytes.Equal(data[:8], []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}) {
+		return nil, info, false
+	}
+	var idat bytes.Buffer
+	colorType := -1
+	offset := 8
+	for offset+12 <= len(data) {
+		length := int(binary.BigEndian.Uint32(data[offset : offset+4]))
+		if length < 0 || offset+12+length > len(data) {
+			return nil, info, false
+		}
+		kind := string(data[offset+4 : offset+8])
+		payload := data[offset+8 : offset+8+length]
+		switch kind {
+		case "IHDR":
+			if length < 13 {
+				return nil, info, false
+			}
+			info.width = int(binary.BigEndian.Uint32(payload[0:4]))
+			info.height = int(binary.BigEndian.Uint32(payload[4:8]))
+			info.bits = int(payload[8])
+			colorType = int(payload[9])
+			if payload[10] != 0 || payload[11] != 0 || payload[12] != 0 || info.bits != 8 || info.width <= 0 || info.height <= 0 {
+				return nil, info, false
+			}
+			switch colorType {
+			case 0:
+				info.colors = 1
+				info.colorSpace = "DeviceGray"
+			case 2:
+				info.colors = 3
+				info.colorSpace = "DeviceRGB"
+			default:
+				return nil, info, false
+			}
+		case "tRNS", "PLTE":
+			return nil, info, false
+		case "IDAT":
+			idat.Write(payload)
+		case "IEND":
+			if colorType < 0 || idat.Len() == 0 {
+				return nil, info, false
+			}
+			return idat.Bytes(), info, true
+		}
+		offset += 12 + length
+	}
+	return nil, info, false
 }
 
 func (w *pdfPageWriter) getOpacityGS(a float64) pdfName {
