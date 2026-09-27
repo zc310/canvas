@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	typesettingFont "github.com/go-text/typesetting/font"
 	"github.com/go-text/typesetting/font/opentype"
@@ -20,6 +21,14 @@ import (
 type Shaper struct {
 	sfnt *font.SFNT
 	font *harfbuzz.Font
+	// buffers recycles harfbuzz Buffers. The shape plan cache (planCache) lives
+	// on the Buffer rather than on the Font, so allocating a Buffer per Shape
+	// call throws the plan away and forces a full shaping plan recompile on
+	// every call (otMapBuilder.compile has to build the font's GSUB class maps,
+	// which dominates text shaping cost). The pool is held by pointer so that
+	// value copies of Shaper share it; a zero Shaper has no pool and falls back
+	// to allocating a Buffer per call.
+	buffers *sync.Pool
 }
 
 // NewShaper returns a new text shaper.
@@ -33,7 +42,8 @@ func NewShaper(b []byte, _ int) (Shaper, error) {
 		return Shaper{}, err
 	}
 	return Shaper{
-		font: harfbuzz.NewFont(typesettingFont.NewFace(font)),
+		font:    harfbuzz.NewFont(typesettingFont.NewFace(font)),
+		buffers: &sync.Pool{New: func() any { return harfbuzz.NewBuffer() }},
 	}, nil
 }
 
@@ -49,9 +59,34 @@ func NewShaperSFNT(sfnt *font.SFNT) (Shaper, error) {
 func (s Shaper) Destroy() {
 }
 
+// acquireBuffer returns a buffer to shape into. Shape copies its results into
+// the returned Glyph slice before releasing the buffer, so callers never hold
+// on to a recycled buffer.
+func (s Shaper) acquireBuffer() *harfbuzz.Buffer {
+	if s.buffers == nil {
+		return harfbuzz.NewBuffer()
+	}
+	if buf, ok := s.buffers.Get().(*harfbuzz.Buffer); ok && buf != nil {
+		return buf
+	}
+	return harfbuzz.NewBuffer()
+}
+
+// releaseBuffer returns a buffer to the pool. Clear only resets the state used
+// by a single shaping run and keeps both the shape plan cache and the already
+// allocated slices, so recycling does not change any shaping result.
+func (s Shaper) releaseBuffer(buf *harfbuzz.Buffer) {
+	if s.buffers == nil || buf == nil {
+		return
+	}
+	s.buffers.Put(buf)
+}
+
 // Shape shapes the string for a given direction, script, and language.
 func (s Shaper) Shape(text string, ppem uint16, direction Direction, script Script, lang string, features string, variations string) []Glyph {
-	buf := harfbuzz.NewBuffer()
+	buf := s.acquireBuffer()
+	defer s.releaseBuffer(buf)
+	buf.Clear()
 	rtext := []rune(text)
 	buf.AddRunes(rtext, 0, -1)
 	buf.ClusterLevel = harfbuzz.MonotoneCharacters
