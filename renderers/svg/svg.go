@@ -438,7 +438,9 @@ func (r *SVG) RenderText(text *canvas.Text, m canvas.Matrix) {
 		}
 	}
 	r.writeClasses(r.w)
-	fmt.Fprintf(r.w, `">`)
+	// SVG collapses whitespace by default; text such as code blocks that relies on
+	// leading or repeated spaces must preserve it.
+	fmt.Fprintf(r.w, `" xml:space="preserve">`)
 
 	text.WalkSpans(func(x, y float64, span canvas.TextSpan) {
 		if span.IsText() {

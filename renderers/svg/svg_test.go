@@ -37,6 +37,26 @@ func TestSVGText(t *testing.T) {
 	//test.String(t, s, `<style>`+"\n"+`@font-face{font-family:'dejavu-serif';src:url('data:font/truetype;base64,');}`+"\n"+`@font-face{font-family:'eb-garamond';src:url('data:font/opentype;base64,');}`+"\n"+`</style><text x="0" y="0" style="font: 12px dejavu-serif"><tspan x="0" y="7.421875" style="font:8px dejavu-serif">dejaVu8</tspan><tspan x="0" y="20.453125" letter-spacing="1" style="font-style:italic;fill:#f00">glyphspacing</tspan><tspan x="0" y="33.725625" style="font:700 6.996px dejavu-serif">dejaVu12sub</tspan><tspan x="0" y="38.5" style="font:700 10px eb-garamond">garamond10</tspan></text><path d="M0 22.703125H91.71875V21.803125H0z" fill="#f00"/>`)
 }
 
+// SVG collapses whitespace, so the leading and repeated spaces that code blocks rely
+// on are lost when rendered; the text element must set xml:space="preserve".
+func TestSVGTextPreservesWhitespace(t *testing.T) {
+	family := canvas.NewFontFamily("test-serif")
+	if err := family.LoadFontFile("../../resources/DejaVuSerif.ttf", canvas.FontRegular); err != nil {
+		t.Fatal(err)
+	}
+	face := family.Face(12.0, canvas.Black, canvas.FontRegular, canvas.FontNormal)
+
+	s := renderSVG(func(ctx *canvas.Context) {
+		ctx.DrawText(0.0, 0.0, canvas.NewTextLine(face, "    indented  x", canvas.Left))
+	})
+	if !strings.Contains(s, `xml:space="preserve"`) {
+		t.Fatalf(`SVG text is missing xml:space="preserve": %s`, s)
+	}
+	if !strings.Contains(s, ">    indented  x<") {
+		t.Fatalf("SVG text did not keep leading/repeated spaces: %s", s)
+	}
+}
+
 // renderSVG draws onto a 100x100 canvas and returns the SVG output without the <svg> header.
 func renderSVG(draw func(*canvas.Context)) string {
 	c := canvas.New(100.0, 100.0)
