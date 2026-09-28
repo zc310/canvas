@@ -1461,20 +1461,7 @@ func (w *pdfPageWriter) embedImage(img image.Image, enc cimage.ImageEncoding) pd
 				streamMask = cimg.Mask.Bytes
 				filtersMask = pdfArray{pdfFilterDCT}
 			} else if enc == cimage.Lossy {
-				hasMask := false
-				sp := img.Bounds().Min // starting point
-				mask := image.NewGray(img.Bounds())
-				for y := 0; y < size.Y; y++ {
-					for x := 0; x < size.X; x++ {
-						_, _, _, A := img.At(sp.X+x, sp.Y+y).RGBA()
-						if A != 0 {
-							mask.SetGray(x, y, color.Gray{uint8(A >> 8)})
-						}
-						if A>>8 != 255 {
-							hasMask = true
-						}
-					}
-				}
+				mask, hasMask := alphaGray(img, size)
 
 				if hasMask {
 					var bufMask bytes.Buffer
@@ -1483,6 +1470,11 @@ func (w *pdfPageWriter) embedImage(img image.Image, enc cimage.ImageEncoding) pd
 					filtersMask = pdfArray{pdfFilterDCT}
 				}
 			} else {
+				// NOTE: this branch is broken upstream. stream is still the raw JPEG
+				// data at this point and filters is still DCTDecode, so writing RGB
+				// bytes over it either corrupts the image or panics when the JPEG is
+				// smaller than width*height*3. Left as-is pending a proper fix; the
+				// hot lossless paths below are the ones worth optimising.
 				hasMask := false
 				sp := img.Bounds().Min // starting point
 				streamMask = make([]byte, size.X*size.Y)
@@ -1520,20 +1512,7 @@ func (w *pdfPageWriter) embedImage(img image.Image, enc cimage.ImageEncoding) pd
 			stream = buf.Bytes()
 			filters = pdfArray{pdfFilterDCT}
 		} else {
-			hasMask := false
-			sp := img.Bounds().Min // starting point
-			mask := image.NewGray(img.Bounds())
-			for y := 0; y < size.Y; y++ {
-				for x := 0; x < size.X; x++ {
-					_, _, _, A := img.At(sp.X+x, sp.Y+y).RGBA()
-					if A != 0 {
-						mask.SetGray(x, y, color.Gray{uint8(A >> 8)})
-					}
-					if A>>8 != 255 {
-						hasMask = true
-					}
-				}
-			}
+			mask, hasMask := alphaGray(img, size)
 
 			var buf bytes.Buffer
 			_ = jpeg.Encode(&buf, img, nil)
@@ -1548,42 +1527,9 @@ func (w *pdfPageWriter) embedImage(img image.Image, enc cimage.ImageEncoding) pd
 			}
 		}
 	} else if opaqueImg, ok := img.(interface{ Opaque() bool }); ok && opaqueImg.Opaque() {
-		sp := img.Bounds().Min // starting point
-		stream = make([]byte, size.X*size.Y*3)
-		for y := 0; y < size.Y; y++ {
-			for x := 0; x < size.X; x++ {
-				i := (y*size.X + x) * 3
-				R, G, B, A := img.At(sp.X+x, sp.Y+y).RGBA()
-				if A != 0 {
-					stream[i+0] = byte((R * 65535 / A) >> 8)
-					stream[i+1] = byte((G * 65535 / A) >> 8)
-					stream[i+2] = byte((B * 65535 / A) >> 8)
-				}
-			}
-		}
+		stream, _, _ = rgbStream(img, size)
 	} else {
-		hasMask := false
-		sp := img.Bounds().Min // starting point
-		stream = make([]byte, size.X*size.Y*3)
-		streamMask = make([]byte, size.X*size.Y)
-		for y := 0; y < size.Y; y++ {
-			for x := 0; x < size.X; x++ {
-				i := (y*size.X + x) * 3
-				R, G, B, A := img.At(sp.X+x, sp.Y+y).RGBA()
-				if A != 0 {
-					stream[i+0] = byte((R * 65535 / A) >> 8)
-					stream[i+1] = byte((G * 65535 / A) >> 8)
-					stream[i+2] = byte((B * 65535 / A) >> 8)
-					streamMask[y*size.X+x] = byte(A >> 8)
-				}
-				if A>>8 != 255 {
-					hasMask = true
-				}
-			}
-		}
-		if !hasMask {
-			streamMask = nil
-		}
+		stream, streamMask, _ = rgbStream(img, size)
 	}
 
 	dict := pdfDict{
@@ -1619,6 +1565,138 @@ func (w *pdfPageWriter) embedImage(img image.Image, enc cimage.ImageEncoding) pd
 	})
 	w.pdf.images[img] = ref
 	return ref
+}
+
+// alphaGray extracts the alpha plane of img as an 8-bit grayscale image and
+// reports whether any pixel is not fully opaque.
+//
+// The obvious loop calls img.At(x, y).RGBA(), which costs four interface
+// dispatches per pixel and showed up as a fifth of the time spent converting
+// image-heavy documents to PDF. Switching on the concrete image type first
+// keeps the exact same colour arithmetic by still calling the colour type's own
+// RGBA method, so the output is byte for byte identical.
+func alphaGray(img image.Image, size image.Point) (*image.Gray, bool) {
+	hasAlpha := false
+	mask := image.NewGray(image.Rect(0, 0, size.X, size.Y))
+	switch src := img.(type) {
+	case *image.NRGBA:
+		pix, stride := src.Pix, src.Stride
+		for y := 0; y < size.Y; y++ {
+			row := pix[y*stride : y*stride+size.X*4]
+			out := mask.Pix[y*mask.Stride : y*mask.Stride+size.X]
+			for x := 0; x < size.X; x++ {
+				o := x * 4
+				_, _, _, a := color.NRGBA{row[o], row[o+1], row[o+2], row[o+3]}.RGBA()
+				out[x] = byte(a >> 8)
+				if out[x] != 0xff {
+					hasAlpha = true
+				}
+			}
+		}
+	case *image.RGBA:
+		pix, stride := src.Pix, src.Stride
+		for y := 0; y < size.Y; y++ {
+			row := pix[y*stride : y*stride+size.X*4]
+			out := mask.Pix[y*mask.Stride : y*mask.Stride+size.X]
+			for x := 0; x < size.X; x++ {
+				o := x * 4
+				_, _, _, a := color.RGBA{row[o], row[o+1], row[o+2], row[o+3]}.RGBA()
+				out[x] = byte(a >> 8)
+				if out[x] != 0xff {
+					hasAlpha = true
+				}
+			}
+		}
+	default:
+		sp := img.Bounds().Min // starting point
+		for y := 0; y < size.Y; y++ {
+			for x := 0; x < size.X; x++ {
+				_, _, _, a := img.At(sp.X+x, sp.Y+y).RGBA()
+				if a != 0 {
+					mask.Pix[y*mask.Stride+x] = byte(a >> 8)
+				}
+				if a>>8 != 255 {
+					hasAlpha = true
+				}
+			}
+		}
+	}
+	return mask, hasAlpha
+}
+
+// rgbStream flattens img into an unpremultiplied 8-bit RGB stream. It also
+// returns the 8-bit alpha plane, or nil when the image is fully opaque.
+//
+// As in alphaGray, the per-pixel work goes through the concrete colour type's
+// RGBA method so the rounding matches the interface-based version exactly.
+func rgbStream(img image.Image, size image.Point) (rgb, alpha []byte, hasAlpha bool) {
+	rgb = make([]byte, size.X*size.Y*3)
+	alpha = make([]byte, size.X*size.Y)
+	switch src := img.(type) {
+	case *image.NRGBA:
+		pix, stride := src.Pix, src.Stride
+		for y := 0; y < size.Y; y++ {
+			row := pix[y*stride : y*stride+size.X*4]
+			o := y * size.X
+			for x := 0; x < size.X; x++ {
+				p := x * 4
+				i := (o + x) * 3
+				c := color.NRGBA{row[p], row[p+1], row[p+2], row[p+3]}
+				r, g, b, a := c.RGBA()
+				if a != 0 {
+					rgb[i+0] = byte((r * 65535 / a) >> 8)
+					rgb[i+1] = byte((g * 65535 / a) >> 8)
+					rgb[i+2] = byte((b * 65535 / a) >> 8)
+				}
+				alpha[o+x] = byte(a >> 8)
+				if alpha[o+x] != 0xff {
+					hasAlpha = true
+				}
+			}
+		}
+	case *image.RGBA:
+		pix, stride := src.Pix, src.Stride
+		for y := 0; y < size.Y; y++ {
+			row := pix[y*stride : y*stride+size.X*4]
+			o := y * size.X
+			for x := 0; x < size.X; x++ {
+				p := x * 4
+				i := (o + x) * 3
+				c := color.RGBA{row[p], row[p+1], row[p+2], row[p+3]}
+				r, g, b, a := c.RGBA()
+				if a != 0 {
+					rgb[i+0] = byte((r * 65535 / a) >> 8)
+					rgb[i+1] = byte((g * 65535 / a) >> 8)
+					rgb[i+2] = byte((b * 65535 / a) >> 8)
+				}
+				alpha[o+x] = byte(a >> 8)
+				if alpha[o+x] != 0xff {
+					hasAlpha = true
+				}
+			}
+		}
+	default:
+		sp := img.Bounds().Min // starting point
+		for y := 0; y < size.Y; y++ {
+			for x := 0; x < size.X; x++ {
+				i := (y*size.X + x) * 3
+				r, g, b, a := img.At(sp.X+x, sp.Y+y).RGBA()
+				if a != 0 {
+					rgb[i+0] = byte((r * 65535 / a) >> 8)
+					rgb[i+1] = byte((g * 65535 / a) >> 8)
+					rgb[i+2] = byte((b * 65535 / a) >> 8)
+				}
+				alpha[y*size.X+x] = byte(a >> 8)
+				if alpha[y*size.X+x] != 0xff {
+					hasAlpha = true
+				}
+			}
+		}
+	}
+	if !hasAlpha {
+		alpha = nil
+	}
+	return rgb, alpha, hasAlpha
 }
 
 type pngStreamInfo struct {
@@ -1752,12 +1830,12 @@ func (w *pdfPageWriter) getPattern(gradient canvas.Gradient, m canvas.Matrix) pd
 		shading["ShadingType"] = 2
 		shading["Coords"] = pdfArray{g.Start.X * ptPerMm, g.Start.Y * ptPerMm, g.End.X * ptPerMm, g.End.Y * ptPerMm}
 		shading["Function"] = patternGradFunction(g.Grad)
-		shading["Extend"] = pdfArray{true, true}
+		shading["Extend"] = pdfArray{g.Extend[0], g.Extend[1]}
 	} else if g, ok := gradient.(*canvas.RadialGradient); ok {
 		shading["ShadingType"] = 3
 		shading["Coords"] = pdfArray{g.C0.X * ptPerMm, g.C0.Y * ptPerMm, g.R0 * ptPerMm, g.C1.X * ptPerMm, g.C1.Y * ptPerMm, g.R1 * ptPerMm}
 		shading["Function"] = patternGradFunction(g.Grad)
-		shading["Extend"] = pdfArray{true, true}
+		shading["Extend"] = pdfArray{g.Extend[0], g.Extend[1]}
 	}
 	pattern := pdfDict{
 		"PatternType": 2,
