@@ -1418,11 +1418,7 @@ func (w *pdfPageWriter) embedImage(img image.Image, enc cimage.ImageEncoding) pd
 	var streamMask []byte
 
 	size := img.Bounds().Size()
-	var filters, filtersMask pdfArray
-	if w.pdf.compress {
-		filters = append(filters, pdfFilterFlate)
-		filtersMask = append(filtersMask, pdfFilterFlate)
-	}
+	filters, filtersMask := flateFilters(w.pdf.compress)
 	if cimg, ok := img.(*cimage.Image); ok && cimg.Mimetype == "image/png" && cimg.Mask == nil {
 		if raw, info, extracted := pngImageStream(cimg.Bytes); extracted {
 			stream = raw
@@ -1470,32 +1466,15 @@ func (w *pdfPageWriter) embedImage(img image.Image, enc cimage.ImageEncoding) pd
 					filtersMask = pdfArray{pdfFilterDCT}
 				}
 			} else {
-				// NOTE: this branch is broken upstream. stream is still the raw JPEG
-				// data at this point and filters is still DCTDecode, so writing RGB
-				// bytes over it either corrupts the image or panics when the JPEG is
-				// smaller than width*height*3. Left as-is pending a proper fix; the
-				// hot lossless paths below are the ones worth optimising.
-				hasMask := false
-				sp := img.Bounds().Min // starting point
-				streamMask = make([]byte, size.X*size.Y)
-				for y := 0; y < size.Y; y++ {
-					for x := 0; x < size.X; x++ {
-						i := (y*size.X + x) * 3
-						R, G, B, A := img.At(sp.X+x, sp.Y+y).RGBA()
-						if A != 0 {
-							stream[i+0] = byte((R * 65535 / A) >> 8)
-							stream[i+1] = byte((G * 65535 / A) >> 8)
-							stream[i+2] = byte((B * 65535 / A) >> 8)
-							streamMask[y*size.X+x] = byte(A >> 8)
-						}
-						if A>>8 != 255 {
-							hasMask = true
-						}
-					}
-				}
-				if !hasMask {
-					streamMask = nil
-				}
+				// Lossless encoding was requested, so DCTDecode is not an option.
+				// Emit the unpremultiplied RGB and grayscale alpha streams the same
+				// way the non-JPEG lossless paths below do. Reusing the JPEG payload
+				// here would contradict the requested encoding, and the previous code
+				// wrote RGB bytes straight over that payload while the filter still
+				// claimed DCTDecode, which corrupted the image and panicked outright
+				// when the JPEG was smaller than width*height*3.
+				stream, streamMask, _ = rgbStream(img, size)
+				filters, filtersMask = flateFilters(w.pdf.compress)
 			}
 		}
 	} else if enc == cimage.Lossy {
@@ -1697,6 +1676,15 @@ func rgbStream(img image.Image, size image.Point) (rgb, alpha []byte, hasAlpha b
 		alpha = nil
 	}
 	return rgb, alpha, hasAlpha
+}
+
+// flateFilters returns the filter chains for raw sample streams, honouring the
+// writer's compress setting. An empty chain means the samples are stored as-is.
+func flateFilters(compress bool) (filters, filtersMask pdfArray) {
+	if compress {
+		return pdfArray{pdfFilterFlate}, pdfArray{pdfFilterFlate}
+	}
+	return nil, nil
 }
 
 type pngStreamInfo struct {
