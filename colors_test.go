@@ -3,6 +3,7 @@ package canvas
 import (
 	"fmt"
 	"image/color"
+	"math"
 	"testing"
 )
 
@@ -138,18 +139,6 @@ func TestRadialGradientAt(t *testing.T) {
 		return g
 	}
 
-	// colorApproxEqual allows small rounding differences from interpolation.
-	colorApproxEqual := func(a, b color.RGBA) bool {
-		diff := func(x, y uint8) int {
-			d := int(x) - int(y)
-			if d < 0 {
-				return -d
-			}
-			return d
-		}
-		return diff(a.R, b.R) <= 1 && diff(a.G, b.G) <= 1 && diff(a.B, b.B) <= 1 && diff(a.A, b.A) <= 1
-	}
-
 	tests := []struct {
 		name string
 		grad *RadialGradient
@@ -283,4 +272,323 @@ func TestRadialGradientAt(t *testing.T) {
 
 func formatRGBA(c color.RGBA) string {
 	return fmt.Sprintf("RGBA{%d, %d, %d, %d}", c.R, c.G, c.B, c.A)
+}
+
+// colorApproxEqual allows small rounding differences from interpolation.
+func colorApproxEqual(a, b color.RGBA) bool {
+	diff := func(x, y uint8) int {
+		d := int(x) - int(y)
+		if d < 0 {
+			return -d
+		}
+		return d
+	}
+	return diff(a.R, b.R) <= 1 && diff(a.G, b.G) <= 1 && diff(a.B, b.B) <= 1 && diff(a.A, b.A) <= 1
+}
+
+func TestLinearGradientExtend(t *testing.T) {
+	red := color.RGBA{255, 0, 0, 255}
+	blue := color.RGBA{0, 0, 255, 255}
+
+	// Horizontal gradient from x=0 (red) to x=10 (blue).
+	makeGrad := func() *LinearGradient {
+		g := NewLinearGradient(Point{0, 0}, Point{10, 0})
+		g.Add(0.0, red)
+		g.Add(1.0, blue)
+		return g
+	}
+
+	tests := []struct {
+		name   string
+		extend [2]bool
+		x, y   float64
+		want   color.RGBA
+	}{
+		{name: "both sides extend beyond start", extend: [2]bool{true, true}, x: -5, y: 0, want: red},
+		{name: "both sides extend beyond end", extend: [2]bool{true, true}, x: 20, y: 0, want: blue},
+		{name: "no extend leaves region before start unpainted", extend: [2]bool{false, true}, x: -5, y: 0, want: Transparent},
+		{name: "no extend leaves region after end unpainted", extend: [2]bool{true, false}, x: 20, y: 0, want: Transparent},
+		{name: "neither side extends", extend: [2]bool{false, false}, x: 5, y: 0, want: color.RGBA{128, 0, 127, 255}},
+		{name: "inside range is painted when both sides closed", extend: [2]bool{false, false}, x: -5, y: 0, want: Transparent},
+		{name: "inside range is painted when only end closed", extend: [2]bool{true, false}, x: 5, y: 0, want: color.RGBA{128, 0, 127, 255}},
+		{name: "exact start point", extend: [2]bool{false, false}, x: 0, y: 0, want: red},
+		{name: "exact end point", extend: [2]bool{false, false}, x: 10, y: 0, want: blue},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := makeGrad()
+			g.Extend = tt.extend
+			got := g.At(tt.x, tt.y)
+			if !colorApproxEqual(got, tt.want) {
+				t.Errorf("At(%v, %v) = %v, want %v (within ±1 per channel)",
+					tt.x, tt.y, formatRGBA(got), formatRGBA(tt.want))
+			}
+		})
+	}
+}
+
+func TestLinearGradientVerticalAndDiagonalExtend(t *testing.T) {
+	red := color.RGBA{255, 0, 0, 255}
+	blue := color.RGBA{0, 0, 255, 255}
+
+	vertical := NewLinearGradient(Point{0, 0}, Point{0, 10})
+	vertical.Add(0.0, red)
+	vertical.Add(1.0, blue)
+	vertical.Extend = [2]bool{true, false}
+	if got := vertical.At(0, 20); got != Transparent {
+		t.Errorf("vertical At(0, 20) = %v, want %v", formatRGBA(got), formatRGBA(Transparent))
+	}
+	if got := vertical.At(0, -20); got != red {
+		t.Errorf("vertical At(0, -20) = %v, want %v", formatRGBA(got), formatRGBA(red))
+	}
+
+	// The d.X == 0 && d.Y == 0 branch divides by d2, which is now guarded.
+	diagonal := NewLinearGradient(Point{0, 0}, Point{10, 10})
+	diagonal.Add(0.0, red)
+	diagonal.Add(1.0, blue)
+	diagonal.Extend = [2]bool{false, false}
+	if got := diagonal.At(-1, -1); got != Transparent {
+		t.Errorf("diagonal At(-1, -1) = %v, want %v", formatRGBA(got), formatRGBA(Transparent))
+	}
+	if got := diagonal.At(20, 20); got != Transparent {
+		t.Errorf("diagonal At(20, 20) = %v, want %v", formatRGBA(got), formatRGBA(Transparent))
+	}
+
+	// Grad.At(NaN) falls through to the last stop, so at() has to reject NaN
+	// coordinates itself rather than letting them reach the interpolation.
+	nan := NewLinearGradient(Point{0, 0}, Point{10, 0})
+	nan.Add(0.0, red)
+	nan.Add(1.0, blue)
+	nan.Extend = [2]bool{true, true}
+	if got := nan.At(math.NaN(), 0); got != Transparent {
+		t.Errorf("At(NaN, 0) = %v, want %v", formatRGBA(got), formatRGBA(Transparent))
+	}
+	// A horizontal gradient only reads p.X, so a NaN y is legitimately ignored
+	// there; a diagonal one divides p.Dot(d) by d2 and does propagate it.
+	nanDiagonal := NewLinearGradient(Point{0, 0}, Point{10, 10})
+	nanDiagonal.Add(0.0, red)
+	nanDiagonal.Add(1.0, blue)
+	nanDiagonal.Extend = [2]bool{true, true}
+	if got := nanDiagonal.At(5, math.NaN()); got != Transparent {
+		t.Errorf("diagonal At(5, NaN) = %v, want %v", formatRGBA(got), formatRGBA(Transparent))
+	}
+
+	// A zero-length gradient divides by d2 == 0, which is now guarded by
+	// falling back to t = 0. Since 0 is inside [0,1] the gradient paints the
+	// first stop everywhere; what matters is that it no longer yields the
+	// NaN-derived colours the unguarded division produced.
+	degenerate := NewLinearGradient(Point{5, 5}, Point{5, 5})
+	degenerate.Add(0.0, red)
+	degenerate.Add(1.0, blue)
+	degenerate.Extend = [2]bool{false, false}
+	if got := degenerate.At(5, 5); !colorApproxEqual(got, red) {
+		t.Errorf("degenerate At(5, 5) = %v, want %v", formatRGBA(got), formatRGBA(red))
+	}
+	if got := degenerate.At(50, 50); !colorApproxEqual(got, red) {
+		t.Errorf("degenerate At(50, 50) = %v, want %v", formatRGBA(got), formatRGBA(red))
+	}
+}
+
+func TestGradientExtendDefaultsToPad(t *testing.T) {
+	if got := NewLinearGradient(Point{0, 0}, Point{1, 0}).Extend; got != [2]bool{true, true} {
+		t.Errorf("NewLinearGradient Extend = %v, want [true true]", got)
+	}
+	if got := NewRadialGradient(Point{0, 0}, 0, Point{0, 0}, 1).Extend; got != [2]bool{true, true} {
+		t.Errorf("NewRadialGradient Extend = %v, want [true true]", got)
+	}
+}
+
+func TestRadialGradientExtend(t *testing.T) {
+	red := color.RGBA{255, 0, 0, 255}
+	blue := color.RGBA{0, 0, 255, 255}
+
+	// Concentric gradient, radius 0 to 10.
+	makeGrad := func() *RadialGradient {
+		g := NewRadialGradient(Point{0, 0}, 0, Point{0, 0}, 10)
+		g.Add(0.0, red)
+		g.Add(1.0, blue)
+		return g
+	}
+
+	tests := []struct {
+		name   string
+		extend [2]bool
+		x, y   float64
+		want   color.RGBA
+	}{
+		{name: "both sides extend beyond outer circle", extend: [2]bool{true, true}, x: 20, y: 0, want: blue},
+		{name: "no extend beyond outer circle is unpainted", extend: [2]bool{true, false}, x: 20, y: 0, want: Transparent},
+		{name: "no extend on either side", extend: [2]bool{false, false}, x: 20, y: 0, want: Transparent},
+		{name: "inside the outer circle is still painted", extend: [2]bool{false, false}, x: 5, y: 0, want: color.RGBA{128, 0, 127, 255}},
+		{name: "at the outer circle", extend: [2]bool{false, false}, x: 10, y: 0, want: blue},
+		{name: "extend beyond inner circle is painted", extend: [2]bool{true, true}, x: 0, y: 0, want: red},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := makeGrad()
+			g.Extend = tt.extend
+			got := g.At(tt.x, tt.y)
+			if !colorApproxEqual(got, tt.want) {
+				t.Errorf("At(%v, %v) = %v, want %v (within ±1 per channel)",
+					tt.x, tt.y, formatRGBA(got), formatRGBA(tt.want))
+			}
+		})
+	}
+}
+
+// radialAtPadReference is the pre-Extend implementation of RadialGradient.At,
+// kept here so the default path can be checked against it.
+func radialAtPadReference(g *RadialGradient, x, y float64) color.RGBA {
+	if len(g.Grad) == 0 {
+		return Transparent
+	}
+	pd := Point{x, y}.Sub(g.C0)
+	b := pd.Dot(g.cd) + g.R0*g.dr
+	c := pd.Dot(pd) - g.R0*g.R0
+	t0, t1 := solveQuadraticFormula(g.a, -2.0*b, c)
+
+	valid := func(t float64) bool {
+		return !math.IsNaN(t) && t >= 0 && t <= 1 && g.R0+g.dr*t >= 0
+	}
+	hasPositive := func(t float64) bool {
+		return !math.IsNaN(t) && t > 0 && g.R0+g.dr*t >= 0
+	}
+	if valid(t1) {
+		return g.Grad.At(t1)
+	}
+	if valid(t0) {
+		return g.Grad.At(t0)
+	}
+	if hasPositive(t0) || hasPositive(t1) {
+		return g.Grad.At(1)
+	}
+	return g.Grad.At(0)
+}
+
+func TestRadialGradientDefaultExtendMatchesPrevious(t *testing.T) {
+	grads := []*RadialGradient{
+		NewRadialGradient(Point{0, 0}, 0, Point{0, 0}, 10),
+		NewRadialGradient(Point{0, 0}, 2, Point{0, 0}, 10),
+		NewRadialGradient(Point{30, 30}, 5, Point{170, 170}, 60),
+		NewRadialGradient(Point{0, 0}, 0, Point{10, 0}, 10),
+		NewRadialGradient(Point{10, 10}, 10, Point{10, 10}, 0),
+		NewRadialGradient(Point{5, 5}, 0, Point{5, 5}, 0),
+	}
+	colors := []color.RGBA{
+		{255, 192, 203, 255},
+		{255, 255, 255, 255},
+		{0, 128, 0, 255},
+		{128, 0, 0, 128},
+		{0, 0, 128, 128},
+	}
+	for i, g := range grads {
+		g.Add(0.0, colors[i%len(colors)])
+		g.Add(0.5, colors[(i+1)%len(colors)])
+		g.Add(1.0, colors[(i+2)%len(colors)])
+	}
+
+	for i, g := range grads {
+		t.Run(fmt.Sprintf("grad%d", i), func(t *testing.T) {
+			if g.Extend != [2]bool{true, true} {
+				t.Fatalf("Extend = %v, want [true true]", g.Extend)
+			}
+			for x := -20.0; x <= 200.0; x += 7.5 {
+				for y := -20.0; y <= 200.0; y += 7.5 {
+					got := g.At(x, y)
+					want := radialAtPadReference(g, x, y)
+					if !colorApproxEqual(got, want) {
+						t.Fatalf("At(%v, %v) = %v, want %v", x, y,
+							formatRGBA(got), formatRGBA(want))
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestRadialParameter(t *testing.T) {
+	// r(t) = 10t, so every point on the +x axis at distance d has the single
+	// root t = d, and any t < 0 would have a negative radius.
+	concentric := NewRadialGradient(Point{0, 0}, 0, Point{0, 0}, 10)
+	// r(t) = 10 + 10t, so t < 0 still has a positive radius and extend bit 0
+	// becomes meaningful.
+	growing := NewRadialGradient(Point{0, 0}, 10, Point{0, 0}, 20)
+	// r(t) = -10t: the root with the larger t is the one with the negative
+	// radius and must be rejected in favour of the smaller root.
+	shrinking := NewRadialGradient(Point{0, 0}, 0, Point{0, 0}, -10)
+	// cd.Dot(cd) - dr*dr == 0, so the quadratic degenerates to the linear
+	// fallback in RadialParameter.
+	degenerate := NewRadialGradient(Point{0, 0}, 0, Point{10, 0}, 10)
+	// Both a and b vanish, so no solution exists at any point.
+	collapsed := NewRadialGradient(Point{0, 0}, 0, Point{0, 0}, 0)
+
+	tests := []struct {
+		name   string
+		grad   *RadialGradient
+		x, y   float64
+		extend int
+		wantT  float64
+		wantOK bool
+	}{
+		{name: "concentric midpoint", grad: concentric, x: 5, y: 0, extend: 0, wantT: 0.5, wantOK: true},
+		{name: "concentric beyond end needs extend bit 1", grad: concentric, x: 20, y: 0, extend: 0, wantOK: false},
+		{name: "concentric beyond end allowed by extend bit 1", grad: concentric, x: 20, y: 0, extend: 2, wantT: 2, wantOK: true},
+		{name: "root with negative radius is rejected", grad: concentric, x: -5, y: 0, extend: 0, wantT: 0.5, wantOK: true},
+		{name: "inside the inner circle has no solution", grad: growing, x: 0, y: 0, extend: 0, wantOK: false},
+		{name: "t below zero with positive radius needs extend bit 0", grad: growing, x: 5, y: 0, extend: 0, wantOK: false},
+		{name: "t below zero with positive radius allowed by extend bit 0", grad: growing, x: 5, y: 0, extend: 1, wantT: -0.5, wantOK: true},
+		{name: "inside the gradient range", grad: growing, x: 12, y: 0, extend: 0, wantT: 0.2, wantOK: true},
+		{name: "larger root has negative radius so the smaller one is used", grad: shrinking, x: 5, y: 0, extend: 0, wantOK: false},
+		{name: "smaller root is used once extend bit 0 is set", grad: shrinking, x: 5, y: 0, extend: 1, wantT: -0.5, wantOK: true},
+		{name: "degenerate linear family", grad: degenerate, x: 5, y: 0, extend: 0, wantT: 0.25, wantOK: true},
+		{name: "degenerate linear family beyond end", grad: degenerate, x: 25, y: 0, extend: 0, wantOK: false},
+		{name: "degenerate linear family beyond end allowed by extend", grad: degenerate, x: 25, y: 0, extend: 2, wantT: 1.25, wantOK: true},
+		{name: "degenerate family has no solution behind the start", grad: degenerate, x: -5, y: 0, extend: 3, wantOK: false},
+		{name: "vanishing a and b have no solution", grad: collapsed, x: 5, y: 0, extend: 3, wantOK: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := tt.grad.RadialParameter(tt.x, tt.y, tt.extend)
+			if ok != tt.wantOK {
+				t.Fatalf("RadialParameter(%v, %v, %d) ok = %v, want %v", tt.x, tt.y, tt.extend, ok, tt.wantOK)
+			}
+			if ok && !Equal(got, tt.wantT) {
+				t.Errorf("RadialParameter(%v, %v, %d) = %v, want %v",
+					tt.x, tt.y, tt.extend, got, tt.wantT)
+			}
+		})
+	}
+}
+
+// TestRadialParameterPrefersLargestT covers the two-circle case. With a focal
+// family the quadratic has two roots that are both in range and both have a
+// non-negative radius, so the choice between them is observable and the
+// larger one has to win.
+func TestRadialParameterPrefersLargestT(t *testing.T) {
+	// r(t) = 10t, centre moving from (0,0) to (30,0). cd.Dot(cd) - dr*dr is
+	// 800, so the quadratic is genuinely non-degenerate and (20,0) yields the
+	// roots 0.5 and 1.0, both admissible.
+	g := NewRadialGradient(Point{0, 0}, 0, Point{30, 0}, 10)
+	got, ok := g.RadialParameter(20, 0, 0)
+	if !ok || !Equal(got, 1.0) {
+		t.Errorf("RadialParameter(20, 0, 0) = %v, %v; want 1, true", got, ok)
+	}
+	// The smaller root must never be preferred, whichever extend bits are set.
+	for _, extend := range []int{1, 2, 3} {
+		got, ok := g.RadialParameter(20, 0, extend)
+		if !ok || !Equal(got, 1.0) {
+			t.Errorf("RadialParameter(20, 0, %d) = %v, %v; want 1, true", extend, got, ok)
+		}
+	}
+	// Past the outer circle only the smaller root stays in range, so extend
+	// bit 1 admits the larger one and the result jumps to it.
+	if got, ok := g.RadialParameter(24, 0, 0); !ok || !Equal(got, 0.6) {
+		t.Errorf("RadialParameter(24, 0, 0) = %v, %v; want 0.6, true", got, ok)
+	}
+	if got, ok := g.RadialParameter(24, 0, 2); !ok || !Equal(got, 1.2) {
+		t.Errorf("RadialParameter(24, 0, 2) = %v, %v; want 1.2, true", got, ok)
+	}
 }

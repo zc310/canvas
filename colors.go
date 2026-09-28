@@ -171,19 +171,39 @@ func lerp(a, b, t uint32) uint8 {
 type LinearGradient struct {
 	Grad
 	Start, End Point
-	d          Point
-	d2         float64
+	// Extend controls whether the gradient is painted before the start point
+	// (Extend[0]) and after the end point (Extend[1]). When false the region
+	// outside the gradient is left unpainted (transparent).
+	Extend [2]bool
+	d      Point
+	d2     float64
 }
 
-// NewLinearGradient returns a new linear gradient pattern.
+// NewLinearGradient returns a new linear gradient pattern. The gradient extends
+// on both sides by default.
 func NewLinearGradient(start, end Point) *LinearGradient {
 	d := end.Sub(start)
 	return &LinearGradient{
-		Start: start,
-		End:   end,
-		d:     d,
-		d2:    d.Dot(d),
+		Start:  start,
+		End:    end,
+		Extend: [2]bool{true, true},
+		d:      d,
+		d2:     d.Dot(d),
 	}
+}
+
+// at returns the color at gradient parameter t, honoring Extend.
+func (g *LinearGradient) at(t float64) color.RGBA {
+	if math.IsNaN(t) {
+		return Transparent
+	}
+	if t < 0 && !g.Extend[0] {
+		return Transparent
+	}
+	if t > 1 && !g.Extend[1] {
+		return Transparent
+	}
+	return g.Grad.At(t)
 }
 
 // SetColorSpace sets the color space. Automatically called by the rasterizer.
@@ -200,12 +220,14 @@ func (g *LinearGradient) At(x, y float64) color.RGBA {
 
 	p := Point{x, y}.Sub(g.Start)
 	if Equal(g.d.Y, 0.0) && !Equal(g.d.X, 0.0) {
-		return g.Grad.At(p.X / g.d.X) // horizontal
+		return g.at(p.X / g.d.X) // horizontal
 	} else if !Equal(g.d.Y, 0.0) && Equal(g.d.X, 0.0) {
-		return g.Grad.At(p.Y / g.d.Y) // vertical
+		return g.at(p.Y / g.d.Y) // vertical
 	}
-	t := p.Dot(g.d) / g.d2
-	return g.Grad.At(t)
+	if Equal(g.d2, 0.0) {
+		return g.at(0)
+	}
+	return g.at(p.Dot(g.d) / g.d2)
 }
 
 // RadialGradient is a radial gradient pattern between two circles defined by their center points and radii. Color stop at offset 0 corresponds to the first circle and offset 1 to the second circle.
@@ -213,22 +235,28 @@ type RadialGradient struct {
 	Grad
 	C0, C1 Point
 	R0, R1 float64
+	// Extend controls whether the gradient is painted before the first circle
+	// (Extend[0]) and after the second circle (Extend[1]). When false the region
+	// outside the gradient is left unpainted (transparent).
+	Extend [2]bool
 	cd     Point
 	dr, a  float64
 }
 
-// NewRadialGradient returns a new radial gradient pattern.
+// NewRadialGradient returns a new radial gradient pattern. The gradient extends
+// on both sides by default.
 func NewRadialGradient(c0 Point, r0 float64, c1 Point, r1 float64) *RadialGradient {
 	cd := c1.Sub(c0)
 	dr := r1 - r0
 	return &RadialGradient{
-		C0: c0,
-		R0: r0,
-		C1: c1,
-		R1: r1,
-		cd: cd,
-		dr: dr,
-		a:  cd.Dot(cd) - dr*dr,
+		C0:     c0,
+		R0:     r0,
+		C1:     c1,
+		R1:     r1,
+		Extend: [2]bool{true, true},
+		cd:     cd,
+		dr:     dr,
+		a:      cd.Dot(cd) - dr*dr,
 	}
 }
 
@@ -238,10 +266,76 @@ func (g *RadialGradient) SetColorSpace(colorSpace ColorSpace) Gradient {
 	return g
 }
 
+// RadialParameter returns the parameter t of the two-circle interpolation family
+// ((1-t)*C0+t*C1, R0+t*dr) at point (x,y) and whether a usable solution exists.
+// A point may lie on two circles; the largest t allowed by extend is chosen.
+// extend bit 0 permits t<0, bit 1 permits t>1. Circles with a negative radius are
+// rejected. When no solution exists the color is undefined (unpainted).
+func (g *RadialGradient) RadialParameter(x, y float64, extend int) (float64, bool) {
+	pd := Point{x, y}.Sub(g.C0)
+	b := pd.Dot(g.cd) + g.R0*g.dr
+	c := pd.Dot(pd) - g.R0*g.R0
+	a := g.a
+	allowed := func(t float64) bool {
+		if math.IsNaN(t) || g.R0+g.dr*t < 0 {
+			return false
+		}
+		switch {
+		case t < 0:
+			return extend&1 != 0
+		case t > 1:
+			return extend&2 != 0
+		}
+		return true
+	}
+	best, found := 0.0, false
+	consider := func(t float64) {
+		if !allowed(t) {
+			return
+		}
+		if !found || t > best {
+			best, found = t, true
+		}
+	}
+	if a == 0 {
+		if b == 0 {
+			return 0, false
+		}
+		consider(c / (2.0 * b))
+		return best, found
+	}
+	discr := b*b - a*c
+	if discr < 0 {
+		return 0, false
+	}
+	sqrtDiscr := math.Sqrt(discr)
+	inva := 1.0 / a
+	consider((b - sqrtDiscr) * inva)
+	consider((b + sqrtDiscr) * inva)
+	if found {
+		return best, true
+	}
+	return 0, false
+}
+
 // At returns the color at position (x,y).
 func (g *RadialGradient) At(x, y float64) color.RGBA {
 	if len(g.Grad) == 0 {
 		return Transparent
+	}
+	if !g.Extend[0] || !g.Extend[1] {
+		extend := 0
+		if g.Extend[0] {
+			extend |= 1
+		}
+		if g.Extend[1] {
+			extend |= 2
+		}
+		t, ok := g.RadialParameter(x, y, extend)
+		if !ok {
+			return Transparent
+		}
+		return g.Grad.At(t)
 	}
 
 	// see reference implementation of pixman-radial-gradient
