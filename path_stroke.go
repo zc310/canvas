@@ -634,12 +634,16 @@ func (p *Path) offset(halfWidth float64, cr Capper, jr Joiner, strokeOpen bool, 
 
 // Offset offsets the path by w and returns a new path. A positive w will offset the path to the right-hand side, that is, it expands CCW oriented contours and contracts CW oriented contours. If you don't know the orientation you can use `Path.CCW` to find out, but if there may be self-intersection you should use `Path.Settle` to remove them and orient all filling contours CCW. The tolerance is the maximum deviation from the actual offset when flattening Béziers and optimizing the path.
 func (p *Path) Offset(w float64, tolerance float64) *Path {
+	return p.offsetWithFastStroke(w, tolerance, FastStroke)
+}
+
+func (p *Path) offsetWithFastStroke(w float64, tolerance float64, fastStroke bool) *Path {
 	if Equal(w, 0.0) {
 		return p
 	}
 
 	q := &Path{d: make([]float64, 0, 4*p.Len())}
-	if !FastStroke {
+	if !fastStroke {
 		// make sure all filling paths are CCW
 		p = p.Settle(NonZero) // TODO: set/check boolean if path is settled to avoid costly and unnecessary settling
 	}
@@ -649,7 +653,7 @@ func (p *Path) Offset(w float64, tolerance float64) *Path {
 			q = q.Append(rhs)
 		}
 	}
-	if !FastStroke {
+	if !fastStroke {
 		// fix overlapping and spilled parts
 		q = q.Settle(Positive)
 	}

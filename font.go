@@ -1,6 +1,7 @@
 package canvas
 
 import (
+	"container/list"
 	"encoding/binary"
 	"fmt"
 	"image/color"
@@ -738,18 +739,17 @@ type glyphPathKey struct {
 
 func makeGlyphPathKey(face *FontFace, glyphs []text.Glyph, ppem uint16) glyphPathKey {
 	ids := make([]byte, 0, len(glyphs)*2)
-	advs := make([]byte, 0, len(glyphs)*16)
+	advs := make([]byte, 0, len(glyphs)*32)
 	var buf [8]byte
 	for _, g := range glyphs {
 		ids = append(ids, byte(g.ID), byte(g.ID>>8))
-		// Encode the advances as float64 bit patterns so that -0 versus 0 and
-		// differing NaN payloads stay distinguishable.
-		b := math.Float64bits(float64(g.XAdvance))
-		binary.BigEndian.PutUint64(buf[:], b)
-		advs = append(advs, buf[:]...)
-		b = math.Float64bits(float64(g.YAdvance))
-		binary.BigEndian.PutUint64(buf[:], b)
-		advs = append(advs, buf[:]...)
+		// Encode advances and offsets as float64 bit patterns so that -0 versus
+		// 0 and differing NaN payloads stay distinguishable. Glyph offsets are
+		// part of buildPath's geometry (combining marks rely on them).
+		for _, value := range []float64{float64(g.XAdvance), float64(g.YAdvance), float64(g.XOffset), float64(g.YOffset)} {
+			binary.BigEndian.PutUint64(buf[:], math.Float64bits(value))
+			advs = append(advs, buf[:]...)
+		}
 	}
 	return glyphPathKey{
 		font: face.Font, ppem: ppem,
@@ -775,22 +775,73 @@ func makeGlyphPathKey(face *FontFace, glyphs []text.Glyph, ppem uint16) glyphPat
 // Handing out the same *Path would let those rewrites corrupt every later
 // render. Copy is a single fixed-size memory copy, negligible next to the
 // curve refitting inside Offset.
-var glyphPathCache sync.Map
+const maxGlyphPathCacheEntries = 65536
+
+type glyphPathCacheStore struct {
+	mu      sync.Mutex
+	entries map[glyphPathKey]*list.Element
+	lru     *list.List
+}
+
+type glyphPathCacheItem struct {
+	key   glyphPathKey
+	entry *glyphPathCacheEntry
+}
+
+var glyphPathCache = glyphPathCacheStore{
+	entries: make(map[glyphPathKey]*list.Element),
+	lru:     list.New(),
+}
 
 // glyphPathCacheHits and glyphPathCacheMisses let tests assert the hit rate.
 var glyphPathCacheHits, glyphPathCacheMisses int64
 
 func (face *FontFace) toPath(glyphs []text.Glyph, ppem uint16) (*Path, float64) {
 	key := makeGlyphPathKey(face, glyphs, ppem)
-	if v, ok := glyphPathCache.Load(key); ok {
+	if entry, ok := glyphPathCache.load(key); ok {
 		atomic.AddInt64(&glyphPathCacheHits, 1)
-		c := v.(*glyphPathCacheEntry)
-		return c.path.Copy(), c.width
+		return entry.path.Copy(), entry.width
 	}
 	p, width := face.buildPath(glyphs, ppem)
+	entry, loaded := glyphPathCache.store(key, &glyphPathCacheEntry{path: p.Copy(), width: width})
+	if loaded {
+		atomic.AddInt64(&glyphPathCacheHits, 1)
+		return entry.path.Copy(), entry.width
+	}
 	atomic.AddInt64(&glyphPathCacheMisses, 1)
-	glyphPathCache.Store(key, &glyphPathCacheEntry{path: p.Copy(), width: width})
 	return p, width
+}
+
+func (c *glyphPathCacheStore) load(key glyphPathKey) (*glyphPathCacheEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	element, ok := c.entries[key]
+	if !ok {
+		return nil, false
+	}
+	c.lru.MoveToFront(element)
+	return element.Value.(*glyphPathCacheItem).entry, true
+}
+
+// store inserts an entry and evicts only the least recently used entries when
+// the bound is reached. It returns an existing entry when another goroutine
+// populated the same key while this goroutine was building the path.
+func (c *glyphPathCacheStore) store(key glyphPathKey, entry *glyphPathCacheEntry) (*glyphPathCacheEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if element, ok := c.entries[key]; ok {
+		c.lru.MoveToFront(element)
+		return element.Value.(*glyphPathCacheItem).entry, true
+	}
+	element := c.lru.PushFront(&glyphPathCacheItem{key: key, entry: entry})
+	c.entries[key] = element
+	if c.lru.Len() > maxGlyphPathCacheEntries {
+		oldest := c.lru.Back()
+		item := oldest.Value.(*glyphPathCacheItem)
+		delete(c.entries, item.key)
+		c.lru.Remove(oldest)
+	}
+	return entry, false
 }
 
 type glyphPathCacheEntry struct {
@@ -817,11 +868,9 @@ func (face *FontFace) buildPath(glyphs []text.Glyph, ppem uint16) (*Path, float6
 			d = -d
 		}
 
-		// use FastStroke to omit settling the path
-		origFastStroke := FastStroke
-		FastStroke = true
-		p = p.Offset(d, Tolerance)
-		FastStroke = origFastStroke
+		// Use the fast path locally. Do not toggle the package-level FastStroke
+		// variable: PDF pages may be rendered concurrently.
+		p = p.offsetWithFastStroke(d, Tolerance, true)
 	}
 	if face.FauxItalic != 0.0 {
 		p = p.Transform(Identity.Shear(face.FauxItalic, 0.0))

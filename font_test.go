@@ -3,8 +3,28 @@ package canvas
 import (
 	"testing"
 
+	"github.com/tdewolff/canvas/text"
 	"github.com/tdewolff/test"
 )
+
+func TestGlyphPathKeyIncludesGlyphOffsets(t *testing.T) {
+	family := NewFontFamily("dejavu-serif")
+	if err := family.LoadFontFile("resources/DejaVuSerif.ttf", FontRegular); err != nil {
+		t.Fatal(err)
+	}
+	face := family.Face(12.0*ptPerMm, Black, FontRegular, FontNormal)
+	base := []text.Glyph{{ID: 1, XAdvance: 10, YAdvance: 20}}
+	key := makeGlyphPathKey(face, base, face.PPEM(DefaultResolution))
+	base[0].XOffset = 1
+	if key == makeGlyphPathKey(face, base, face.PPEM(DefaultResolution)) {
+		t.Fatal("glyph path key ignored XOffset")
+	}
+	base[0].XOffset = 0
+	base[0].YOffset = 1
+	if key == makeGlyphPathKey(face, base, face.PPEM(DefaultResolution)) {
+		t.Fatal("glyph path key ignored YOffset")
+	}
+}
 
 func TestFontFamily(t *testing.T) {
 	family := NewFontFamily("dejavu-serif")
