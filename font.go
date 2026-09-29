@@ -1,12 +1,14 @@
 package canvas
 
 import (
+	"encoding/binary"
 	"fmt"
 	"image/color"
 	"math"
 	"os"
 	"reflect"
 	"sync"
+	"sync/atomic"
 
 	"github.com/tdewolff/canvas/text"
 	"github.com/tdewolff/font"
@@ -711,7 +713,93 @@ func (face *FontFace) ToPath(s string) (*Path, float64) {
 	return face.toPath(face.Glyphs(s), face.PPEM(DefaultResolution))
 }
 
+// glyphPathKey identifies every input that affects the geometry produced by
+// toPath.
+//
+// Only quantities that change the resulting outline are part of the key: the
+// font, ppem, FauxBold/FauxItalic, the starting offsets and the per-glyph
+// advances. Fill, Deco and the colours do not appear here because toPath only
+// builds the outline; painting happens later in RenderPath.
+//
+// Size has its own field even though it only appears as a factor of
+// FauxBold: with FauxBold held equal, a different Size still yields a
+// different offset distance d = FauxBold * Size.
+type glyphPathKey struct {
+	font     *Font
+	ppem     uint16
+	fauxBold float64
+	fauxItal float64
+	size     float64
+	xOffset  int32
+	yOffset  int32
+	glyphs   string
+	advances string
+}
+
+func makeGlyphPathKey(face *FontFace, glyphs []text.Glyph, ppem uint16) glyphPathKey {
+	ids := make([]byte, 0, len(glyphs)*2)
+	advs := make([]byte, 0, len(glyphs)*16)
+	var buf [8]byte
+	for _, g := range glyphs {
+		ids = append(ids, byte(g.ID), byte(g.ID>>8))
+		// Encode the advances as float64 bit patterns so that -0 versus 0 and
+		// differing NaN payloads stay distinguishable.
+		b := math.Float64bits(float64(g.XAdvance))
+		binary.BigEndian.PutUint64(buf[:], b)
+		advs = append(advs, buf[:]...)
+		b = math.Float64bits(float64(g.YAdvance))
+		binary.BigEndian.PutUint64(buf[:], b)
+		advs = append(advs, buf[:]...)
+	}
+	return glyphPathKey{
+		font: face.Font, ppem: ppem,
+		fauxBold: face.FauxBold, fauxItal: face.FauxItalic, size: face.Size,
+		xOffset: face.XOffset, yOffset: face.YOffset,
+		glyphs: string(ids), advances: string(advs),
+	}
+}
+
+// glyphPathCache memoizes the result of toPath.
+//
+// On a 1000-page document toPath runs more than thirty thousand times while
+// only about a thousand distinct (font, parameters, glyph sequence) combinations
+// occur -- the same line of text reappears on dozens of pages. Rebuilding an
+// outline is expensive: whenever FauxBold is non-zero, Path.Offset flattens,
+// offsets and refits every cubic bezier in the path, which profiling showed to
+// be 58% of the CPU time of a full conversion. The cache reduces that work
+// from "once per drawn glyph" to "once per distinct glyph".
+//
+// A hit returns a Copy rather than the shared pointer. Path.Transform (and
+// therefore Translate, Scale and Rotate) modifies the path in place, and
+// text.go does exactly that: ps[i].Translate(...) rewrites a span's path.
+// Handing out the same *Path would let those rewrites corrupt every later
+// render. Copy is a single fixed-size memory copy, negligible next to the
+// curve refitting inside Offset.
+var glyphPathCache sync.Map
+
+// glyphPathCacheHits and glyphPathCacheMisses let tests assert the hit rate.
+var glyphPathCacheHits, glyphPathCacheMisses int64
+
 func (face *FontFace) toPath(glyphs []text.Glyph, ppem uint16) (*Path, float64) {
+	key := makeGlyphPathKey(face, glyphs, ppem)
+	if v, ok := glyphPathCache.Load(key); ok {
+		atomic.AddInt64(&glyphPathCacheHits, 1)
+		c := v.(*glyphPathCacheEntry)
+		return c.path.Copy(), c.width
+	}
+	p, width := face.buildPath(glyphs, ppem)
+	atomic.AddInt64(&glyphPathCacheMisses, 1)
+	glyphPathCache.Store(key, &glyphPathCacheEntry{path: p.Copy(), width: width})
+	return p, width
+}
+
+type glyphPathCacheEntry struct {
+	path  *Path
+	width float64
+}
+
+// buildPath builds the glyph outline for real, without consulting the cache.
+func (face *FontFace) buildPath(glyphs []text.Glyph, ppem uint16) (*Path, float64) {
 	p := &Path{}
 	f := face.MmPerEm
 	x, y := face.XOffset, face.YOffset
