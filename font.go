@@ -228,6 +228,13 @@ type Font struct {
 	shaper     text.Shaper
 	variations string
 	features   string
+
+	// glyphCache memoizes toPath outlines for this font. It lives on the font
+	// rather than in a package-level cache: a shared cache keyed by *Font would
+	// keep every font (and its parsed glyph tables, tens of MB for CJK) alive
+	// until the entry was evicted, so browsing many documents grew memory
+	// without bound. Per-font, the cache is released together with the font.
+	glyphCache glyphPathCacheStore
 }
 
 // LoadSystemFont loads a font from the system's fonts.
@@ -726,7 +733,6 @@ func (face *FontFace) ToPath(s string) (*Path, float64) {
 // FauxBold: with FauxBold held equal, a different Size still yields a
 // different offset distance d = FauxBold * Size.
 type glyphPathKey struct {
-	font     *Font
 	ppem     uint16
 	fauxBold float64
 	fauxItal float64
@@ -752,22 +758,28 @@ func makeGlyphPathKey(face *FontFace, glyphs []text.Glyph, ppem uint16) glyphPat
 		}
 	}
 	return glyphPathKey{
-		font: face.Font, ppem: ppem,
+		ppem:     ppem,
 		fauxBold: face.FauxBold, fauxItal: face.FauxItalic, size: face.Size,
 		xOffset: face.XOffset, yOffset: face.YOffset,
 		glyphs: string(ids), advances: string(advs),
 	}
 }
 
-// glyphPathCache memoizes the result of toPath.
+// glyphPathCache memoizes the result of toPath for a single font.
 //
 // On a 1000-page document toPath runs more than thirty thousand times while
-// only about a thousand distinct (font, parameters, glyph sequence) combinations
+// only about a thousand distinct (parameters, glyph sequence) combinations
 // occur -- the same line of text reappears on dozens of pages. Rebuilding an
 // outline is expensive: whenever FauxBold is non-zero, Path.Offset flattens,
 // offsets and refits every cubic bezier in the path, which profiling showed to
 // be 58% of the CPU time of a full conversion. The cache reduces that work
 // from "once per drawn glyph" to "once per distinct glyph".
+//
+// The cache lives on the Font (Font.glyphCache) rather than in a package-level
+// store. A shared store keyed by *Font pins every font -- together with its
+// parsed glyph tables, tens of MB for a CJK font -- until the entry is
+// evicted, so opening one document after another grew memory without bound.
+// Per font, the cache is released with the font itself.
 //
 // A hit returns a Copy rather than the shared pointer. Path.Transform (and
 // therefore Translate, Scale and Rotate) modifies the path in place, and
@@ -775,7 +787,7 @@ func makeGlyphPathKey(face *FontFace, glyphs []text.Glyph, ppem uint16) glyphPat
 // Handing out the same *Path would let those rewrites corrupt every later
 // render. Copy is a single fixed-size memory copy, negligible next to the
 // curve refitting inside Offset.
-const maxGlyphPathCacheEntries = 65536
+const maxGlyphPathCacheEntries = 8192
 
 type glyphPathCacheStore struct {
 	mu      sync.Mutex
@@ -788,22 +800,18 @@ type glyphPathCacheItem struct {
 	entry *glyphPathCacheEntry
 }
 
-var glyphPathCache = glyphPathCacheStore{
-	entries: make(map[glyphPathKey]*list.Element),
-	lru:     list.New(),
-}
-
 // glyphPathCacheHits and glyphPathCacheMisses let tests assert the hit rate.
 var glyphPathCacheHits, glyphPathCacheMisses int64
 
 func (face *FontFace) toPath(glyphs []text.Glyph, ppem uint16) (*Path, float64) {
 	key := makeGlyphPathKey(face, glyphs, ppem)
-	if entry, ok := glyphPathCache.load(key); ok {
+	cache := &face.Font.glyphCache
+	if entry, ok := cache.load(key); ok {
 		atomic.AddInt64(&glyphPathCacheHits, 1)
 		return entry.path.Copy(), entry.width
 	}
 	p, width := face.buildPath(glyphs, ppem)
-	entry, loaded := glyphPathCache.store(key, &glyphPathCacheEntry{path: p.Copy(), width: width})
+	entry, loaded := cache.store(key, &glyphPathCacheEntry{path: p.Copy(), width: width})
 	if loaded {
 		atomic.AddInt64(&glyphPathCacheHits, 1)
 		return entry.path.Copy(), entry.width
@@ -815,6 +823,9 @@ func (face *FontFace) toPath(glyphs []text.Glyph, ppem uint16) (*Path, float64) 
 func (c *glyphPathCacheStore) load(key glyphPathKey) (*glyphPathCacheEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.entries == nil {
+		return nil, false
+	}
 	element, ok := c.entries[key]
 	if !ok {
 		return nil, false
@@ -829,6 +840,10 @@ func (c *glyphPathCacheStore) load(key glyphPathKey) (*glyphPathCacheEntry, bool
 func (c *glyphPathCacheStore) store(key glyphPathKey, entry *glyphPathCacheEntry) (*glyphPathCacheEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = make(map[glyphPathKey]*list.Element)
+		c.lru = list.New()
+	}
 	if element, ok := c.entries[key]; ok {
 		c.lru.MoveToFront(element)
 		return element.Value.(*glyphPathCacheItem).entry, true

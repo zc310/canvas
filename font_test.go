@@ -26,6 +26,35 @@ func TestGlyphPathKeyIncludesGlyphOffsets(t *testing.T) {
 	}
 }
 
+// The glyph path cache must live on the font, not in a package-level store. A
+// shared store keyed by *Font keeps every font (together with its parsed glyph
+// tables, tens of MB for a CJK font) alive until the entry is evicted, so
+// opening one document after another grows memory without bound. This guards
+// that the cache is released with the font and not shared between fonts.
+func TestGlyphPathCacheIsPerFont(t *testing.T) {
+	loadFace := func() *FontFace {
+		family := NewFontFamily("dejavu-serif")
+		if err := family.LoadFontFile("resources/DejaVuSerif.ttf", FontRegular); err != nil {
+			t.Fatal(err)
+		}
+		return family.Face(12.0*ptPerMm, Black, FontRegular, FontNormal)
+	}
+
+	first := loadFace()
+	first.toPath(first.Glyphs("A"), first.PPEM(DefaultResolution))
+	if first.Font.glyphCache.lru == nil || first.Font.glyphCache.lru.Len() == 0 {
+		t.Fatal("glyph cache did not record the font's outline")
+	}
+
+	second := loadFace()
+	if second.Font == first.Font {
+		t.Fatal("loading twice should yield distinct font instances")
+	}
+	if second.Font.glyphCache.lru != nil && second.Font.glyphCache.lru.Len() != 0 {
+		t.Fatal("fonts share the glyph path cache")
+	}
+}
+
 func TestFontFamily(t *testing.T) {
 	family := NewFontFamily("dejavu-serif")
 	if err := family.LoadFontFile("resources/DejaVuSerif.ttf", FontRegular); err != nil {
