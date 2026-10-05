@@ -268,33 +268,48 @@ func (g *RadialGradient) SetColorSpace(colorSpace ColorSpace) Gradient {
 
 // RadialParameter returns the parameter t of the two-circle interpolation family
 // ((1-t)*C0+t*C1, R0+t*dr) at point (x,y) and whether a usable solution exists.
-// A point may lie on two circles; the largest t allowed by extend is chosen.
+// A point may lie on two circles; the largest t of the winning class is chosen.
 // extend bit 0 permits t<0, bit 1 permits t>1. Circles with a negative radius are
 // rejected. When no solution exists the color is undefined (unpainted).
+//
+// Roots with t in [0,1] are the sweep of the shading itself and always win: the
+// extend bits only decide what happens outside that sweep. Competing every root
+// in a single "largest allowed t" pool let an extension root steal points the
+// sweep already covers. Since any t>1 root is larger than any t<=1 root, an
+// end-side extension then flattened whole regions to the end colour — with
+// extend bit 1 set the area around the end circle came out solid blue, while
+// extend 0 and extend 3 kept the gradient on the very same points.
 func (g *RadialGradient) RadialParameter(x, y float64, extend int) (float64, bool) {
 	pd := Point{x, y}.Sub(g.C0)
 	b := pd.Dot(g.cd) + g.R0*g.dr
 	c := pd.Dot(pd) - g.R0*g.R0
 	a := g.a
-	allowed := func(t float64) bool {
-		if math.IsNaN(t) || g.R0+g.dr*t < 0 {
-			return false
-		}
-		switch {
-		case t < 0:
-			return extend&1 != 0
-		case t > 1:
-			return extend&2 != 0
-		}
-		return true
+	// usable reports whether the family member at t exists, i.e. its radius is
+	// not negative.
+	usable := func(t float64) bool {
+		return !math.IsNaN(t) && g.R0+g.dr*t >= 0
 	}
-	best, found := 0.0, false
+	bestCore, haveCore := 0.0, false
+	bestExt, haveExt := 0.0, false
 	consider := func(t float64) {
-		if !allowed(t) {
+		if !usable(t) {
 			return
 		}
-		if !found || t > best {
-			best, found = t, true
+		if t >= 0 && t <= 1 {
+			if !haveCore || t > bestCore {
+				bestCore, haveCore = t, true
+			}
+			return
+		}
+		if t < 0 {
+			if extend&1 == 0 {
+				return
+			}
+		} else if extend&2 == 0 {
+			return
+		}
+		if !haveExt || t > bestExt {
+			bestExt, haveExt = t, true
 		}
 	}
 	if a == 0 {
@@ -302,18 +317,21 @@ func (g *RadialGradient) RadialParameter(x, y float64, extend int) (float64, boo
 			return 0, false
 		}
 		consider(c / (2.0 * b))
-		return best, found
+	} else {
+		discr := b*b - a*c
+		if discr < 0 {
+			return 0, false
+		}
+		sqrtDiscr := math.Sqrt(discr)
+		inva := 1.0 / a
+		consider((b - sqrtDiscr) * inva)
+		consider((b + sqrtDiscr) * inva)
 	}
-	discr := b*b - a*c
-	if discr < 0 {
-		return 0, false
+	if haveCore {
+		return bestCore, true
 	}
-	sqrtDiscr := math.Sqrt(discr)
-	inva := 1.0 / a
-	consider((b - sqrtDiscr) * inva)
-	consider((b + sqrtDiscr) * inva)
-	if found {
-		return best, true
+	if haveExt {
+		return bestExt, true
 	}
 	return 0, false
 }
@@ -343,6 +361,22 @@ func (g *RadialGradient) At(x, y float64) color.RGBA {
 	pd := Point{x, y}.Sub(g.C0)
 	b := pd.Dot(g.cd) + g.R0*g.dr
 	c := pd.Dot(pd) - g.R0*g.R0
+
+	// A negative discriminant means the point lies on none of the circles in the
+	// interpolated family. That happens with eccentric two-circle shadings whose
+	// circles are disjoint or intersecting: the region between the circles that is
+	// outside every member of the family falls here. Such a point is outside the
+	// shading, so it must stay transparent.
+	//
+	// Without this check t0 and t1 are both NaN, both valid() and hasPositive()
+	// reject them, and the tail below returns Grad.At(0) — painting the whole gap
+	// with the start colour. Partial-extend shadings already return Transparent here
+	// (via RadialParameter), so skipping the check also made the same point come out
+	// transparent or start-coloured depending only on Extend.
+	discr := b*b - g.a*c
+	if discr < 0 {
+		return Transparent
+	}
 	t0, t1 := solveQuadraticFormula(g.a, -2.0*b, c)
 
 	valid := func(t float64) bool {

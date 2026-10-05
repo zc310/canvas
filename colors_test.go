@@ -440,6 +440,10 @@ func TestRadialGradientExtend(t *testing.T) {
 
 // radialAtPadReference is the pre-Extend implementation of RadialGradient.At,
 // kept here so the default path can be checked against it.
+// radialAtPadReference mirrors RadialGradient.At for the default Extend =
+// [true, true] case, so that a refactor cannot change the default result without
+// the sweep below noticing. It intentionally repeats the implementation instead
+// of calling At: sharing code would make the comparison vacuous.
 func radialAtPadReference(g *RadialGradient, x, y float64) color.RGBA {
 	if len(g.Grad) == 0 {
 		return Transparent
@@ -447,6 +451,11 @@ func radialAtPadReference(g *RadialGradient, x, y float64) color.RGBA {
 	pd := Point{x, y}.Sub(g.C0)
 	b := pd.Dot(g.cd) + g.R0*g.dr
 	c := pd.Dot(pd) - g.R0*g.R0
+	// Points off every circle of the family (negative discriminant) are outside
+	// the shading and stay transparent; see the comment in At.
+	if b*b-g.a*c < 0 {
+		return Transparent
+	}
 	t0, t1 := solveQuadraticFormula(g.a, -2.0*b, c)
 
 	valid := func(t float64) bool {
@@ -467,7 +476,7 @@ func radialAtPadReference(g *RadialGradient, x, y float64) color.RGBA {
 	return g.Grad.At(0)
 }
 
-func TestRadialGradientDefaultExtendMatchesPrevious(t *testing.T) {
+func TestRadialGradientDefaultExtendMatchesReference(t *testing.T) {
 	grads := []*RadialGradient{
 		NewRadialGradient(Point{0, 0}, 0, Point{0, 0}, 10),
 		NewRadialGradient(Point{0, 0}, 2, Point{0, 0}, 10),
@@ -505,6 +514,46 @@ func TestRadialGradientDefaultExtendMatchesPrevious(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A disjoint eccentric shading has a region that lies on no circle of the
+// interpolated family (negative discriminant). Such points must stay
+// transparent, and in particular must not change with the Extend bits: the same
+// point used to come out transparent for one-sided extend and painted with the
+// start colour when both ends extended.
+func TestRadialGradientDisjointGapStaysTransparent(t *testing.T) {
+	// Circles are far apart: centres 34 apart with radii 8 and 18.
+	newGradient := func() *RadialGradient {
+		g := NewRadialGradient(Point{18, 35}, 8, Point{52, 35}, 18)
+		g.Add(0.0, color.RGBA{255, 0, 0, 255})
+		g.Add(1.0, color.RGBA{0, 0, 255, 255})
+		return g
+	}
+	// Off-family points: to the side of the start circle, away from the end
+	// circle, where the two-circle sweep has no solution at all (negative
+	// discriminant). Each pair was picked from a grid scan of that region.
+	gap := []Point{{X: 4, Y: 27}, {X: 4, Y: 43}, {X: 2, Y: 30}, {X: 4, Y: 24}}
+	for _, extend := range [][2]bool{{true, false}, {false, true}, {true, true}} {
+		g := newGradient()
+		g.Extend = extend
+		for _, pt := range gap {
+			if got := g.At(pt.X, pt.Y); got.A != 0 {
+				t.Errorf("Extend = %v, At(%v, %v) = %v, want transparent",
+					extend, pt.X, pt.Y, formatRGBA(got))
+			}
+		}
+	}
+
+	// Points that are on the family keep their colour, so the check above is not
+	// passing simply because everything went transparent.
+	g := newGradient()
+	g.Extend = [2]bool{true, true}
+	if got := g.At(18, 35); got.A == 0 {
+		t.Errorf("start circle centre = %v, want opaque", formatRGBA(got))
+	}
+	if got := g.At(70, 35); got.A == 0 {
+		t.Errorf("past the end circle = %v, want opaque", formatRGBA(got))
 	}
 }
 
@@ -583,12 +632,38 @@ func TestRadialParameterPrefersLargestT(t *testing.T) {
 			t.Errorf("RadialParameter(20, 0, %d) = %v, %v; want 1, true", extend, got, ok)
 		}
 	}
-	// Past the outer circle only the smaller root stays in range, so extend
-	// bit 1 admits the larger one and the result jumps to it.
+	// At (24,0) only the smaller root stays inside the sweep. The point is well
+	// within the t=1 circle (6 units from its centre against radius 10), so the
+	// sweep colour must win no matter which extend bits are set: an end-side
+	// extension only paints points the sweep misses, it must not overwrite the
+	// sweep with the end colour.
 	if got, ok := g.RadialParameter(24, 0, 0); !ok || !Equal(got, 0.6) {
 		t.Errorf("RadialParameter(24, 0, 0) = %v, %v; want 0.6, true", got, ok)
 	}
-	if got, ok := g.RadialParameter(24, 0, 2); !ok || !Equal(got, 1.2) {
-		t.Errorf("RadialParameter(24, 0, 2) = %v, %v; want 1.2, true", got, ok)
+	for _, extend := range []int{1, 2, 3} {
+		if got, ok := g.RadialParameter(24, 0, extend); !ok || !Equal(got, 0.6) {
+			t.Errorf("RadialParameter(24, 0, %d) = %v, %v; want 0.6, true", extend, got, ok)
+		}
+	}
+	// (45,0) is past the outer circle, so both roots exceed 1 and there is no
+	// sweep value: only extend bit 1 paints it, and then the largest root wins.
+	if got, ok := g.RadialParameter(45, 0, 2); !ok || !Equal(got, 2.25) {
+		t.Errorf("RadialParameter(45, 0, 2) = %v, %v; want 2.25, true", got, ok)
+	}
+	for _, extend := range []int{0, 1} {
+		if got, ok := g.RadialParameter(45, 0, extend); ok {
+			t.Errorf("RadialParameter(45, 0, %d) = %v, %v; want _, false", extend, got, ok)
+		}
+	}
+	// Concentric growing family, r(t) = 10+10t: at (5,0) both roots are
+	// negative, so only extend bit 0 paints the point.
+	growing := NewRadialGradient(Point{0, 0}, 10, Point{0, 0}, 20)
+	if got, ok := growing.RadialParameter(5, 0, 1); !ok || !Equal(got, -0.5) {
+		t.Errorf("RadialParameter(5, 0, 1) = %v, %v; want -0.5, true", got, ok)
+	}
+	for _, extend := range []int{0, 2} {
+		if got, ok := growing.RadialParameter(5, 0, extend); ok {
+			t.Errorf("RadialParameter(5, 0, %d) = %v, %v; want _, false", extend, got, ok)
+		}
 	}
 }
