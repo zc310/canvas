@@ -423,3 +423,21 @@ func TestAddOutlineToPageOutOfRangeDropped(t *testing.T) {
 		t.Fatalf("应只剩 2 条，丢弃整棵子树后实际 %d 条: %+v", len(entries), entries)
 	}
 }
+
+// TestOutlineTitleEncodesNonASCII 验证非 ASCII 标题写成带 BOM 的 UTF-16BE。
+//
+// PDF 文本字符串在无 BOM 时按 PDFDocEncoding 解释，直接写入 UTF-8 字节会在阅读器里
+// 显示为乱码。
+func TestOutlineTitleEncodesNonASCII(t *testing.T) {
+	out := buildAnnotatedPDF(t, 1, func(doc *PDF, index int) {
+		doc.AddOutlineToPage(0, 297, "概述", 0, Dest{Kind: DestFit})
+		doc.AddOutlineToPage(0, 297, "ASCII only", 1, Dest{Kind: DestFit})
+	})
+	// 「概述」的 UTF-16BE 编码：BOM + 0x6982 0x8ff0。
+	if !strings.Contains(out, "/Title(\xfe\xff\x69\x82\x8f\xf0)") {
+		t.Errorf("中文标题未写成 UTF-16BE:\n%s", out)
+	}
+	if !strings.Contains(out, "/Title(ASCII only)") {
+		t.Errorf("ASCII 标题不应加 BOM:\n%s", out)
+	}
+}

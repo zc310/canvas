@@ -736,6 +736,34 @@ func (w *pdfWriter) validOutlines() []pdfOutline {
 	return kept
 }
 
+// pdfTextString encodes s as a PDF text string.
+//
+// PDF text strings are byte strings in PDFDocEncoding unless they start with a
+// UTF-16BE byte order mark, so non-ASCII text has to be encoded explicitly.
+// Writing the UTF-8 bytes directly renders as mojibake in any viewer.
+func pdfTextString(s string) string {
+	ascii := true
+	for _, r := range s {
+		if 0x80 <= r {
+			ascii = false
+			break
+		}
+	}
+	if ascii {
+		return s
+	}
+
+	rs := utf16.Encode([]rune(s))
+	b := make([]byte, 2+2*len(rs))
+	b[0] = 254
+	b[1] = 255
+	for i, r := range rs {
+		b[2+2*i+0] = byte(r >> 8)
+		b[2+2*i+1] = byte(r & 0x00FF)
+	}
+	return string(b)
+}
+
 func (w *pdfWriter) writeOutlines() (pdfRef, bool) {
 	if len(w.outlines) == 0 {
 		return 0, false
@@ -781,7 +809,7 @@ func (w *pdfWriter) writeOutlines() (pdfRef, bool) {
 	}
 	for i := range w.outlines {
 		outline := pdfDict{
-			"Title": w.outlines[i].name,
+			"Title": pdfTextString(w.outlines[i].name),
 		}
 		entry := &w.outlines[i]
 		if entry.dest != nil {
@@ -893,46 +921,23 @@ func (w *pdfWriter) Close() error {
 		"CreationDate": time.Now().Format("D:20060102150405Z0700"),
 	}
 
-	encode := func(s string) string {
-		// TODO: make clean
-		ascii := true
-		for _, r := range s {
-			if 0x80 <= r {
-				ascii = false
-				break
-			}
-		}
-		if ascii {
-			return s
-		}
-
-		rs := utf16.Encode([]rune(s))
-		b := make([]byte, 2+2*len(rs))
-		b[0] = 254
-		b[1] = 255
-		for i, r := range rs {
-			b[2+2*i+0] = byte(r >> 8)
-			b[2+2*i+1] = byte(r & 0x00FF)
-		}
-		return string(b)
-	}
 	if w.title != "" {
-		info["Title"] = encode(w.title)
+		info["Title"] = pdfTextString(w.title)
 	}
 	if w.subject != "" {
-		info["Subject"] = encode(w.subject)
+		info["Subject"] = pdfTextString(w.subject)
 	}
 	if w.keywords != "" {
-		info["Keywords"] = encode(w.keywords)
+		info["Keywords"] = pdfTextString(w.keywords)
 	}
 	if w.author != "" {
-		info["Author"] = encode(w.author)
+		info["Author"] = pdfTextString(w.author)
 	}
 	if w.creator != "" {
-		info["Creator"] = encode(w.creator)
+		info["Creator"] = pdfTextString(w.creator)
 	}
 	if w.lang != "" {
-		catalog["Lang"] = encode(w.creator)
+		catalog["Lang"] = pdfTextString(w.creator)
 	}
 
 	// document catalog
