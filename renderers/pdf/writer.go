@@ -97,6 +97,11 @@ type pdfOutline struct {
 	level int
 	y     float64
 
+	// dest is set by AddOutlineToPage and takes precedence over y. y stays for
+	// the AddOutline form, which infers Fit or FitH from whether y is zero.
+	dest     *Dest
+	pageSize float64
+
 	parent, prev, next, first, last, count int
 }
 
@@ -704,7 +709,38 @@ func (w *pdfWriter) writeFonts(fontMap map[*canvas.Font]pdfRef, vertical bool) {
 	}
 }
 
+// validOutlines drops entries whose target page was never written, together with
+// their descendants.
+//
+// AddOutlineToPage accepts a page index that does not exist yet, and the index is
+// only checkable once every page exists, so a caller that stopped early can leave
+// entries behind. Filtering before the tree is built keeps the positional object
+// references contiguous; dropping a parent would otherwise leave its children
+// pointing at a level the tree builder treats as disconnected and skips.
+func (w *pdfWriter) validOutlines() []pdfOutline {
+	kept := make([]pdfOutline, 0, len(w.outlines))
+	skipDepth := -1
+	for _, entry := range w.outlines {
+		if skipDepth >= 0 {
+			if entry.level > skipDepth {
+				continue
+			}
+			skipDepth = -1
+		}
+		if entry.page < 0 || len(w.pages) <= entry.page {
+			skipDepth = entry.level
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept
+}
+
 func (w *pdfWriter) writeOutlines() (pdfRef, bool) {
+	if len(w.outlines) == 0 {
+		return 0, false
+	}
+	w.outlines = w.validOutlines()
 	if len(w.outlines) == 0 {
 		return 0, false
 	}
@@ -747,10 +783,13 @@ func (w *pdfWriter) writeOutlines() (pdfRef, bool) {
 		outline := pdfDict{
 			"Title": w.outlines[i].name,
 		}
-		if w.outlines[i].y == 0.0 {
-			outline["Dest"] = pdfArray{w.pages[w.outlines[i].page], pdfName("Fit")}
+		entry := &w.outlines[i]
+		if entry.dest != nil {
+			outline["Dest"] = entry.dest.destArray(w.pages[entry.page], entry.pageSize)
+		} else if entry.y == 0.0 {
+			outline["Dest"] = pdfArray{w.pages[entry.page], pdfName("Fit")}
 		} else {
-			outline["Dest"] = pdfArray{w.pages[w.outlines[i].page], pdfName("FitH"), w.outlines[i].y * ptPerMm}
+			outline["Dest"] = pdfArray{w.pages[entry.page], pdfName("FitH"), entry.y * ptPerMm}
 		}
 		if w.outlines[i].parent != -1 {
 			outline["Parent"] = firstRef + pdfRef(w.outlines[i].parent)

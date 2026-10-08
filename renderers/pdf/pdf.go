@@ -121,6 +121,36 @@ func (r *PDF) AddOutline(name string, level int, y float64) {
 	r.w.AddOutline(name, level, y)
 }
 
+// AddOutlineToPage adds an outline entry of an explicit destination kind, bound to
+// the given page rather than to the current one.
+//
+// It is the counterpart to AddAnchorToPage and AddDestToPage. AddOutline infers the
+// destination from y alone, which can only express Fit and FitH; pass dest to state
+// the kind directly. The outline tree is written in Close, so an entry may be
+// registered before its target page exists; entries whose target page never gets
+// written are dropped along with their descendants.
+//
+// level is the nesting depth, zero for a top-level entry, and entries are expected
+// in document order — the tree is rebuilt from the levels, the way AddOutline does.
+//
+// pageHeight is the height of the target page in millimetres; see Dest.
+func (r *PDF) AddOutlineToPage(page int, pageHeight float64, name string, level int, dest Dest) {
+	r.w.pdf.outlines = append(r.w.pdf.outlines, pdfOutline{
+		page:     page,
+		name:     name,
+		level:    level,
+		dest:     &dest,
+		pageSize: pageHeight,
+		// The tree builder treats -1 as "unset"; the zero value would look like
+		// a real reference to the first entry and make entries their own parent.
+		parent: -1,
+		prev:   -1,
+		next:   -1,
+		first:  -1,
+		last:   -1,
+	})
+}
+
 // Close finished and closes the PDF.
 func (r *PDF) Close() error {
 	return r.w.pdf.Close()

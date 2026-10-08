@@ -281,3 +281,145 @@ func TestAddDestToPageOutOfRangeIsDropped(t *testing.T) {
 	}
 	checkDest(t, destFields(t, out, "valid"), "Fit")
 }
+
+// outlineEntry 是从 PDF 产物里读回的一条大纲记录。
+type outlineEntry struct {
+	title   string
+	pageRef string // 目标页对象的间接引用，形如 "7 0 R"
+	kind    string // 目的地类型，不含前导斜杠
+	nums    []float64
+}
+
+// outlineEntries 解析全部大纲条目。
+//
+// 大纲对象的字典键按字母序写出（/Count /Dest /First /Parent /Prev /Title），
+// /Title 通常不在开头，因此按对象边界逐个解析而不是靠固定顺序。
+func outlineEntries(out string) []outlineEntry {
+	entries := make([]outlineEntry, 0, 4)
+	for _, m := range regexp.MustCompile(`(?s)\d+ 0 obj\s*<<[^>]*?/Title\(([^)]*)\)`).FindAllStringSubmatch(out, -1) {
+		dest := regexp.MustCompile(`/Dest\[\s*(\d+) 0 R\s*/(\w+)([^\]]*)\]`).FindStringSubmatch(m[0])
+		if dest == nil {
+			continue
+		}
+		entry := outlineEntry{title: m[1], pageRef: dest[1] + " 0 R", kind: dest[2]}
+		for _, token := range strings.Fields(dest[3]) {
+			if num, err := strconv.ParseFloat(token, 64); err == nil {
+				entry.nums = append(entry.nums, num)
+			}
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+// TestAddOutlineToPageWritesExplicitDests 验证 AddOutlineToPage 按显式类型写出每个
+// 大纲条目的目的地。
+//
+// AddOutline 只能从 y 推断 Fit 或 FitH，XYZ/FitV/FitR 都表达不了。
+func TestAddOutlineToPageWritesExplicitDests(t *testing.T) {
+	const height = 297.0
+	mm := func(v float64) float64 { return v * ptPerMm }
+	// 注册回调对每页都会调用，这里只在第一页注册，避免重复。
+	out := buildAnnotatedPDF(t, 2, func(doc *PDF, index int) {
+		if index != 0 {
+			return
+		}
+		doc.AddOutlineToPage(1, height, "fit", 0, Dest{Kind: DestFit})
+		doc.AddOutlineToPage(1, height, "fith", 0, Dest{Kind: DestFitH, Y: 100})
+		doc.AddOutlineToPage(1, height, "fitv", 1, Dest{Kind: DestFitV, X: 60})
+		doc.AddOutlineToPage(1, height, "xyz", 1, Dest{Kind: DestXYZ, X: 40, Y: 80, Zoom: 2})
+		doc.AddOutlineToPage(0, height, "fitr", 0, Dest{Kind: DestFitR, X0: 10, Y0: 60, X1: 110, Y1: 20})
+	})
+
+	got := outlineEntries(out)
+	want := []struct {
+		title string
+		kind  string
+		// page 是 0 基的目标页，用来确认绑到的是显式页序而非当前页。
+		page int
+		nums []float64
+	}{
+		{"fit", "Fit", 1, nil},
+		{"fith", "FitH", 1, []float64{mm(197)}},
+		{"fitv", "FitV", 1, []float64{mm(60)}},
+		{"xyz", "XYZ", 1, []float64{mm(40), mm(217), mm(2)}},
+		{"fitr", "FitR", 0, []float64{mm(10), mm(277), mm(110), mm(237)}},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("大纲条目 %d 条，期望 %d 条: %+v", len(got), len(want), got)
+	}
+	pageRefs := pageObjects(out)
+	for i, w := range want {
+		entry := got[i]
+		if entry.title != w.title || entry.kind != w.kind {
+			t.Errorf("第 %d 条 = %s/%s，期望 %s/%s", i, entry.title, entry.kind, w.title, w.kind)
+			continue
+		}
+		if entry.pageRef != pageRefs[w.page] {
+			t.Errorf("%s 目标 = %s，期望第 %d 页 %s", w.title, entry.pageRef, w.page+1, pageRefs[w.page])
+		}
+		if len(entry.nums) != len(w.nums) {
+			t.Errorf("%s 数值项 %d 个，期望 %d 个: %v", w.title, len(entry.nums), len(w.nums), entry.nums)
+			continue
+		}
+		for j, expect := range w.nums {
+			if diff := entry.nums[j] - expect; diff > 0.01 || diff < -0.01 {
+				t.Errorf("%s 第 %d 个数值 = %v，期望 %v", w.title, j, entry.nums[j], expect)
+			}
+		}
+	}
+}
+
+// TestAddOutlineToPageBuildsTree 验证层级被正确还原成大纲树。
+func TestAddOutlineToPageBuildsTree(t *testing.T) {
+	out := buildAnnotatedPDF(t, 2, func(doc *PDF, index int) {
+		doc.AddOutlineToPage(0, 297, "top", 0, Dest{Kind: DestFit})
+		doc.AddOutlineToPage(1, 297, "child-a", 1, Dest{Kind: DestFit})
+		doc.AddOutlineToPage(1, 297, "child-b", 1, Dest{Kind: DestFit})
+		doc.AddOutlineToPage(0, 297, "top2", 0, Dest{Kind: DestFit})
+	})
+	// child-a 的 /Parent 应指向 top 的对象号，top 的 /Count 应为 2。
+	if !regexp.MustCompile(`/Count 2[^>]*?/Title\(top\)`).MatchString(out) {
+		t.Errorf("top 未记录 2 个后代:\n%s", out)
+	}
+	objOf := func(title string) string {
+		m := regexp.MustCompile(`(?s)(\d+) 0 obj\s*<[^>]*?/Title\(` + title + `\)`).FindStringSubmatch(out)
+		if m == nil {
+			t.Errorf("找不到条目对象 %s", title)
+			return ""
+		}
+		return m[1]
+	}
+	top := objOf("top")
+	for _, title := range []string{"child-a", "child-b"} {
+		re := regexp.MustCompile(`(?s)\d+ 0 obj\s*<[^>]*?/Parent (\d+) 0 R[^>]*?/Title\(` + title + `\)`)
+		m := re.FindStringSubmatch(out)
+		if m == nil {
+			t.Errorf("%s 缺少 /Parent:\n%s", title, out)
+			continue
+		}
+		if m[1] != top {
+			t.Errorf("%s 的 Parent = %s，期望 top 的对象号 %s", title, m[1], top)
+		}
+	}
+}
+
+// TestAddOutlineToPageOutOfRangeDropped 验证目标页未写出时该条目及其子树被丢弃。
+func TestAddOutlineToPageOutOfRangeDropped(t *testing.T) {
+	out := buildAnnotatedPDF(t, 1, func(doc *PDF, index int) {
+		doc.AddOutlineToPage(5, 297, "gone", 0, Dest{Kind: DestFit})
+		doc.AddOutlineToPage(5, 297, "gone-child", 1, Dest{Kind: DestFit})
+		doc.AddOutlineToPage(0, 297, "kept", 0, Dest{Kind: DestFit})
+		doc.AddOutlineToPage(0, 297, "kept-child", 1, Dest{Kind: DestFit})
+	})
+	entries := outlineEntries(out)
+	for _, e := range entries {
+		if strings.HasPrefix(e.title, "gone") {
+			t.Errorf("悬空条目未丢弃: %+v", entries)
+			break
+		}
+	}
+	if len(entries) != 2 {
+		t.Fatalf("应只剩 2 条，丢弃整棵子树后实际 %d 条: %+v", len(entries), entries)
+	}
+}
