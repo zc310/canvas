@@ -759,6 +759,13 @@ func (w *pdfWriter) Close() error {
 			return strings.Compare(a.name, b.name) // sort lexically
 		})
 		for _, anchor := range w.anchors {
+			// An anchor registered by AddAnchorToPage may name a page that never
+			// got written, for instance when the caller stopped early. The page
+			// index is only known to be valid once every page exists, so a
+			// dangling anchor is dropped here instead of indexing past w.pages.
+			if anchor.page < 0 || len(w.pages) <= anchor.page {
+				continue
+			}
 			var dest pdfArray
 			if anchor.rect.X0 == 0.0 && anchor.rect.X1 == 0.0 && anchor.rect.Y0 == 0.0 && anchor.rect.Y1 == 0.0 {
 				dest = pdfArray{w.pages[anchor.page], pdfName("Fit")}

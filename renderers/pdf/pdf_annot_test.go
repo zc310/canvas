@@ -129,3 +129,35 @@ func TestAddAnchorBindsCurrentPage(t *testing.T) {
 		t.Fatalf("here resolves to %q, want the first page %q", dest, pages[0])
 	}
 }
+
+// TestAddAnchorToPageOutOfRangeIsDropped checks that an anchor naming a page that
+// never gets written does not fail Close.
+//
+// AddAnchorToPage deliberately accepts a page index that does not exist yet, since
+// the whole point is to register an anchor before its target page is created. The
+// index only becomes checkable in Close, by which point a caller that stopped early
+// may have left a dangling anchor behind. That must not panic.
+func TestAddAnchorToPageOutOfRangeIsDropped(t *testing.T) {
+	buf := &bytes.Buffer{}
+	opts := DefaultOptions
+	opts.Compress = false
+	doc := New(buf, 210, 297, &opts)
+
+	surface := canvas.New(210, 297)
+	surface.RenderTo(doc)
+	// Only one page is ever written, but the anchors name a second and a third.
+	doc.AddAnchorToPage(1, "missing", canvas.Rect{X0: 0, Y0: 100, X1: 50, Y1: 120})
+	doc.AddAnchorToPage(2, "also-missing", canvas.Rect{X0: 0, Y0: 100, X1: 50, Y1: 120})
+	doc.AddLink("#missing", canvas.Rect{X0: 10, Y0: 150, X1: 80, Y1: 165})
+
+	if err := doc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "%%EOF") {
+		t.Fatalf("Close did not finish the document:\n%s", out)
+	}
+	if strings.Contains(out, "also-missing") {
+		t.Fatalf("dangling anchor was written to the name tree:\n%s", out)
+	}
+}
