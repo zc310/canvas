@@ -981,8 +981,11 @@ func (w *pdfPageWriter) AddLink(uri string, rect canvas.Rect) {
 		"Rect":    pdfArray{rect.X0 * ptPerMm, rect.Y0 * ptPerMm, rect.X1 * ptPerMm, rect.Y1 * ptPerMm},
 	}
 	if 0 < len(uri) && uri[0] == '#' {
-		// local link
-		annot["Dest"] = uri[1:]
+		// local link; the destination is named, so it must be written as a name
+		// object. PDF 32000-2 table 176 only accepts a name here, while 32000-1
+		// table 173 also allowed a byte string. The name tree key is a string
+		// either way and both forms compare equal by value.
+		annot["Dest"] = pdfName(uri[1:])
 	} else {
 		annot["Contents"] = uri
 		annot["A"] = pdfDict{

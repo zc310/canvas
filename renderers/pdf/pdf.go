@@ -79,6 +79,15 @@ func (r *PDF) AddAnchor(name string, rect canvas.Rect) {
 	r.w.AddAnchor(name, rect)
 }
 
+// AddAnchorToPage adds an anchor bound to the given page index instead of the current
+// page. The destination name tree is only built in Close, and the page references it
+// indexes are known by then, so an anchor may be registered before its target page is
+// created. Links that point backwards — a link on a later page targeting an earlier one —
+// cannot use AddAnchor, which would bind them to whichever page happens to be current.
+func (r *PDF) AddAnchorToPage(page int, name string, rect canvas.Rect) {
+	r.w.pdf.anchors = append(r.w.pdf.anchors, pdfAnchor{page, name, rect})
+}
+
 // AddLink adds a link at the given rectangle. If the URI starts with # this will link to an anchor (set with AddAnchor).
 func (r *PDF) AddLink(uri string, rect canvas.Rect) {
 	r.w.AddLink(uri, rect)
