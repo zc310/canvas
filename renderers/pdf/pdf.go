@@ -85,7 +85,29 @@ func (r *PDF) AddAnchor(name string, rect canvas.Rect) {
 // created. Links that point backwards — a link on a later page targeting an earlier one —
 // cannot use AddAnchor, which would bind them to whichever page happens to be current.
 func (r *PDF) AddAnchorToPage(page int, name string, rect canvas.Rect) {
-	r.w.pdf.anchors = append(r.w.pdf.anchors, pdfAnchor{page, name, rect})
+	r.w.pdf.anchors = append(r.w.pdf.anchors, pdfAnchor{page: page, name: name, rect: rect})
+}
+
+// AddDestToPage registers a named destination of an explicit kind on the given page,
+// which a link can then point at with AddLink("#" + name).
+//
+// It is the unambiguous counterpart to AddAnchor, which infers the destination type
+// from the shape of a rectangle and therefore cannot express, for example, an XYZ
+// destination at x = 0 — indistinguishable from a FitH — or a non-zero zoom, which
+// the inferred form always writes as zero. Prefer this whenever the destination type
+// is known.
+//
+// pageHeight is the height of the target page in millimetres: Dest coordinates use
+// the top left as their origin while PDF uses the bottom left, so the conversion
+// needs the page height. It may differ from the current page's height, and passing
+// the wrong value flips the destination vertically.
+func (r *PDF) AddDestToPage(page int, pageHeight float64, name string, dest Dest) {
+	r.w.pdf.anchors = append(r.w.pdf.anchors, pdfAnchor{
+		page:     page,
+		name:     name,
+		dest:     &dest,
+		pageSize: pageHeight,
+	})
 }
 
 // AddLink adds a link at the given rectangle. If the URI starts with # this will link to an anchor (set with AddAnchor).

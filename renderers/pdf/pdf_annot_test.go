@@ -3,6 +3,7 @@ package pdf
 import (
 	"bytes"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -160,4 +161,123 @@ func TestAddAnchorToPageOutOfRangeIsDropped(t *testing.T) {
 	if strings.Contains(out, "also-missing") {
 		t.Fatalf("dangling anchor was written to the name tree:\n%s", out)
 	}
+}
+
+// mm 把毫米换算成 PDF 点，保留两位小数，与写出格式一致。
+func mm(v float64) string { return strconv.FormatFloat(v*ptPerMm, 'f', 2, 64) }
+
+// destOf 返回名称树里 key 对应的目的地数组，去掉空白便于断言。
+func destOf(t *testing.T, out, key string) string {
+	t.Helper()
+	return strings.Join(strings.Fields(anchorDest(t, out, key)), " ")
+}
+
+// destFields 返回名称树里 key 对应的目的地数组，已去掉 /D 前缀并按空白拆开。
+func destFields(t *testing.T, out, key string) []string {
+	t.Helper()
+	raw := strings.TrimSpace(anchorDest(t, out, key))
+	raw = strings.TrimPrefix(raw, "/D")
+	raw = strings.TrimSpace(strings.TrimPrefix(raw, "["))
+	raw = strings.TrimSpace(strings.TrimSuffix(raw, "]"))
+	return strings.Fields(raw)
+}
+
+// checkDest 逐项比较目的地：名称精确匹配，数值按容差比较。写出时的浮点位数由
+// canvas.Precision 与 minify.Decimal 决定，不便按字符串断言。
+func checkDest(t *testing.T, got []string, wantKind string, wantNums ...float64) {
+	t.Helper()
+	// 目的地数组形如 [N 0 R /Kind num...]，页引用占三项。
+	if len(got) != 4+len(wantNums) {
+		t.Fatalf("目的地 = %v，期望 %d 项", got, 4+len(wantNums))
+	}
+	if got[1] != "0" || got[2] != "R" {
+		t.Fatalf("前三项应为页引用，实际 %v", got[:3])
+	}
+	if got[3] != "/"+wantKind {
+		t.Fatalf("目的地类型 = %q，期望 /%s", got[3], wantKind)
+	}
+	for i, want := range wantNums {
+		token := got[4+i]
+		num, err := strconv.ParseFloat(token, 64)
+		if err != nil {
+			t.Fatalf("第 %d 项 %q 不是数值", 4+i, token)
+		}
+		if diff := num - want; diff > 0.01 || diff < -0.01 {
+			t.Fatalf("第 %d 项 = %v，期望 %v", 4+i, num, want)
+		}
+	}
+}
+
+// TestAddDestToPageWritesExplicitKinds 验证 AddDestToPage 按显式类型写出目的地，
+// 不像 AddAnchor 那样从矩形形状反推。
+func TestAddDestToPageWritesExplicitKinds(t *testing.T) {
+	const height = 297.0
+	mm := func(v float64) float64 { return v * ptPerMm }
+	cases := []struct {
+		name string
+		dest Dest
+		kind string
+		nums []float64
+	}{
+		{"fit", Dest{Kind: DestFit}, "Fit", nil},
+		// 距页顶 100mm → 距页底 197mm。
+		{"fith", Dest{Kind: DestFitH, Y: 100}, "FitH", []float64{mm(197)}},
+		{"fitv", Dest{Kind: DestFitV, X: 50}, "FitV", []float64{mm(50)}},
+		{
+			"xyz", Dest{Kind: DestXYZ, X: 50, Y: 100}, "XYZ",
+			[]float64{mm(50), mm(197), 0},
+		},
+		{"fith-top", Dest{Kind: DestFitH, Y: 0}, "FitH", []float64{mm(297)}},
+		// 这两种正是 AddAnchor 无法表达的：x 为 0 的 XYZ 曾被反推成 FitH，
+		// 而 FitV 的 x 为 0 曾被反推成整页 Fit。
+		{"xyz-origin-x", Dest{Kind: DestXYZ, X: 0, Y: 100}, "XYZ", []float64{0, mm(197), 0}},
+		{"fitv-origin-x", Dest{Kind: DestFitV, X: 0}, "FitV", []float64{0}},
+		{
+			"fitr", Dest{Kind: DestFitR, X0: 10, Y0: 60, X1: 110, Y1: 20}, "FitR",
+			[]float64{mm(10), mm(277), mm(110), mm(237)},
+		},
+	}
+	for _, c := range cases {
+		out := buildAnnotatedPDF(t, 1, func(doc *PDF, index int) {
+			doc.AddDestToPage(0, height, c.name, c.dest)
+			doc.AddLink("#"+c.name, canvas.Rect{X0: 10, Y0: 150, X1: 80, Y1: 165})
+		})
+		t.Run(c.name, func(t *testing.T) {
+			checkDest(t, destFields(t, out, c.name), c.kind, c.nums...)
+		})
+	}
+}
+
+// TestAddDestToPageKeepsZoom 验证 Zoom 不会被写成 0。
+//
+// AddAnchor 从矩形形状反推目的地类型，XYZ 的缩放被硬编码为 0；显式 API 必须
+// 原样写出。
+func TestAddDestToPageKeepsZoom(t *testing.T) {
+	for _, zoom := range []float64{2.5, 1, 0.5} {
+		out := buildAnnotatedPDF(t, 1, func(doc *PDF, index int) {
+			doc.AddDestToPage(0, 297, "zoomed", Dest{Kind: DestXYZ, X: 10, Y: 20, Zoom: zoom})
+			doc.AddLink("#zoomed", canvas.Rect{X0: 10, Y0: 150, X1: 80, Y1: 165})
+		})
+		checkDest(t, destFields(t, out, "zoomed"), "XYZ", 10*ptPerMm, (297-20)*ptPerMm, zoom*ptPerMm)
+	}
+}
+
+// TestAddDestToPageOutOfRangeIsDropped 验证目标页未写出时该目的地被丢弃，且不影响
+// 同一文档里其它内容。
+func TestAddDestToPageOutOfRangeIsDropped(t *testing.T) {
+	out := buildAnnotatedPDF(t, 1, func(doc *PDF, index int) {
+		doc.AddDestToPage(3, 297, "dangling", Dest{Kind: DestFit})
+		doc.AddDestToPage(0, 297, "valid", Dest{Kind: DestFit})
+		doc.AddLink("#dangling", canvas.Rect{X0: 10, Y0: 150, X1: 80, Y1: 165})
+		doc.AddLink("#valid", canvas.Rect{X0: 10, Y0: 200, X1: 80, Y1: 215})
+	})
+	if !strings.Contains(out, "%%EOF") {
+		t.Fatalf("Close 未完成文档:\n%s", out)
+	}
+	// 名称树以 "(name) N 0 R" 的形式出现；链接注解里的 /Dest 也会提到这个名字，
+	// 所以只检查名称树本身。
+	if strings.Contains(out, "(dangling) ") {
+		t.Fatalf("悬空目的地被写入名称树:\n%s", out)
+	}
+	checkDest(t, destFields(t, out, "valid"), "Fit")
 }

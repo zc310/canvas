@@ -32,10 +32,63 @@ import (
 // TODO: Invalid graphics transparency, Group has a transparency S entry or the S entry is null
 // TODO: Invalid Color space, The operator "g" can't be used without Color Profile
 
+// DestKind is a named destination type, matching the PDF destination styles.
+type DestKind int
+
+const (
+	// DestFit fits the whole page in the window.
+	DestFit DestKind = iota
+	// DestFitH fits the page height and scrolls to Y.
+	DestFitH
+	// DestFitV fits the page width and scrolls to X.
+	DestFitV
+	// DestXYZ scrolls to X, Y and applies Zoom. A Zoom of 0 keeps the current one.
+	DestXYZ
+	// DestFitR fits the X0, Y0 to X1, Y1 rectangle in the window.
+	DestFitR
+)
+
+// Dest describes a named destination. Coordinates are in millimetres with the
+// origin at the top left of the target page, matching the source formats this is
+// fed from; they are converted to PDF's bottom-left origin when written.
+//
+// Which fields matter depends on Kind: Fit uses none, FitH uses Y, FitV uses X,
+// XYZ uses X, Y and Zoom, and FitR uses X0, Y0, X1 and Y1.
+type Dest struct {
+	Kind           DestKind
+	X, Y, Zoom     float64
+	X0, Y0, X1, Y1 float64
+}
+
+// destArray renders the destination as a PDF array for the given page reference
+// and page height. height is needed because the source origin is the top left
+// while PDF's is the bottom left.
+func (d Dest) destArray(page pdfRef, height float64) pdfArray {
+	up := func(v float64) float64 { return (height - v) * ptPerMm }
+	switch d.Kind {
+	case DestFit:
+		return pdfArray{page, pdfName("Fit")}
+	case DestFitH:
+		return pdfArray{page, pdfName("FitH"), up(d.Y)}
+	case DestFitV:
+		return pdfArray{page, pdfName("FitV"), d.X * ptPerMm}
+	case DestXYZ:
+		return pdfArray{page, pdfName("XYZ"), d.X * ptPerMm, up(d.Y), d.Zoom * ptPerMm}
+	case DestFitR:
+		return pdfArray{page, pdfName("FitR"), d.X0 * ptPerMm, up(d.Y1), d.X1 * ptPerMm, up(d.Y0)}
+	}
+	return pdfArray{page, pdfName("Fit")}
+}
+
 type pdfAnchor struct {
 	page int
 	name string
 	rect canvas.Rect
+	// dest is set by AddDestToPage and takes precedence over rect. rect stays
+	// for the rectangle-based AddAnchor, whose destination type is inferred from
+	// the rectangle's shape.
+	dest     *Dest
+	pageSize float64
 }
 
 type pdfOutline struct {
@@ -767,7 +820,9 @@ func (w *pdfWriter) Close() error {
 				continue
 			}
 			var dest pdfArray
-			if anchor.rect.X0 == 0.0 && anchor.rect.X1 == 0.0 && anchor.rect.Y0 == 0.0 && anchor.rect.Y1 == 0.0 {
+			if anchor.dest != nil {
+				dest = anchor.dest.destArray(w.pages[anchor.page], anchor.pageSize)
+			} else if anchor.rect.X0 == 0.0 && anchor.rect.X1 == 0.0 && anchor.rect.Y0 == 0.0 && anchor.rect.Y1 == 0.0 {
 				dest = pdfArray{w.pages[anchor.page], pdfName("Fit")}
 			} else if anchor.rect.X0 == 0.0 && anchor.rect.X1 == 0.0 && anchor.rect.Y0 == anchor.rect.Y1 {
 				dest = pdfArray{w.pages[anchor.page], pdfName("FitH"), anchor.rect.Y0 * ptPerMm}
@@ -976,7 +1031,7 @@ func (w *pdfPageWriter) writePage(parent pdfRef) pdfRef {
 
 // AddAnchor adds an anchor to which a link can point.
 func (w *pdfPageWriter) AddAnchor(name string, rect canvas.Rect) {
-	w.pdf.anchors = append(w.pdf.anchors, pdfAnchor{len(w.pdf.pages), name, rect})
+	w.pdf.anchors = append(w.pdf.anchors, pdfAnchor{page: len(w.pdf.pages), name: name, rect: rect})
 }
 
 // AddLink adds a local or external link. Local links are # + anchor name (see AddAnchor).
