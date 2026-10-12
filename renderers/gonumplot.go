@@ -5,8 +5,8 @@ import (
 	"image/color"
 	"math"
 
-	"github.com/tdewolff/canvas"
-	canvasFont "github.com/tdewolff/font"
+	"github.com/zc310/canvas"
+	canvasFont "github.com/zc310/font"
 	"golang.org/x/image/font"
 	gonumFont "gonum.org/v1/plot/font"
 	"gonum.org/v1/plot/vg"

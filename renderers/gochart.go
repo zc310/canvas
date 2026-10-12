@@ -5,8 +5,8 @@ import (
 	"math"
 
 	"github.com/golang/freetype/truetype"
-	"github.com/tdewolff/canvas"
-	"github.com/tdewolff/font"
+	"github.com/zc310/canvas"
+	"github.com/zc310/font"
 	"github.com/wcharczuk/go-chart/v2"
 	"github.com/wcharczuk/go-chart/v2/drawing"
 )

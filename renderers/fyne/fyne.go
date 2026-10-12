@@ -3,8 +3,8 @@ package fyne
 import (
 	"fyne.io/fyne/v2"
 	fyneCanvas "fyne.io/fyne/v2/canvas"
-	"github.com/tdewolff/canvas"
-	"github.com/tdewolff/canvas/renderers/rasterizer"
+	"github.com/zc310/canvas"
+	"github.com/zc310/canvas/renderers/rasterizer"
 )
 
 type Fyne struct {

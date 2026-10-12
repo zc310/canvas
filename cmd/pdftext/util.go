@@ -9,7 +9,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/tdewolff/canvas"
+	"github.com/zc310/canvas"
 	"github.com/tdewolff/minify/v2"
 )
 

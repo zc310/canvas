@@ -3,7 +3,7 @@ package canvas
 import (
 	"testing"
 
-	"github.com/tdewolff/canvas/text"
+	"github.com/zc310/canvas/text"
 	"github.com/tdewolff/test"
 )
 

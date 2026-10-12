@@ -2,7 +2,7 @@
 
 package fuzz
 
-import "github.com/tdewolff/canvas"
+import "github.com/zc310/canvas"
 
 // Fuzz is a fuzz test.
 func Fuzz(data []byte) int {

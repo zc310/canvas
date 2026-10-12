@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	canvasFont "github.com/tdewolff/font"
+	canvasFont "github.com/zc310/font"
 )
 
 // DVIFonts gets a font according to its font name and font size in points. Font names include:

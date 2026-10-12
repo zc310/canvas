@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/tdewolff/canvas"
+	"github.com/zc310/canvas"
 )
 
 func TestPS(t *testing.T) {

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tdewolff/canvas"
-	cimage "github.com/tdewolff/canvas/image"
+	"github.com/zc310/canvas"
+	cimage "github.com/zc310/canvas/image"
 )
 
 // A JPEG image with a separate non-JPEG mask used to take a branch in

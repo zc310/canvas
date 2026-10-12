@@ -11,8 +11,8 @@ import (
 	"github.com/paulmach/osm"
 	"github.com/paulmach/osm/osmapi"
 	"github.com/paulmach/osm/osmgeojson"
-	"github.com/tdewolff/canvas"
-	"github.com/tdewolff/canvas/renderers"
+	"github.com/zc310/canvas"
+	"github.com/zc310/canvas/renderers"
 )
 
 func main() {

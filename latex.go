@@ -64,7 +64,7 @@ import (
 	"github.com/go-fonts/latin-modern/lmsansquot8regular"
 	"star-tex.org/x/tex"
 
-	canvasFont "github.com/tdewolff/font"
+	canvasFont "github.com/zc310/font"
 )
 
 var preamble = `\nopagenumbers

@@ -10,8 +10,8 @@ import (
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 
-	"github.com/tdewolff/canvas"
-	cimage "github.com/tdewolff/canvas/image"
+	"github.com/zc310/canvas"
+	cimage "github.com/zc310/canvas/image"
 )
 
 type Gio struct {

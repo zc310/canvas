@@ -9,8 +9,8 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/tdewolff/canvas"
-	"github.com/tdewolff/canvas/renderers"
+	"github.com/zc310/canvas"
+	"github.com/zc310/canvas/renderers"
 )
 
 var fontFamily *canvas.FontFamily

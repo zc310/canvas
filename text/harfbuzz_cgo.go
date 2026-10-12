@@ -21,7 +21,7 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/tdewolff/font"
+	"github.com/zc310/font"
 )
 
 // Design inspired by https://github.com/npillmayer/tyse/blob/main/engine/text/textshaping/

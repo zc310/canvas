@@ -14,7 +14,7 @@ import (
 	"github.com/go-text/typesetting/harfbuzz"
 	"github.com/go-text/typesetting/language"
 
-	"github.com/tdewolff/font"
+	"github.com/zc310/font"
 )
 
 // Shaper is a text shaper formatting a string in properly positioned glyphs.

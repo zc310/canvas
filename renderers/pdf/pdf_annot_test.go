@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tdewolff/canvas"
+	"github.com/zc310/canvas"
 )
 
 var pageObjPattern = regexp.MustCompile(`(\d+) 0 obj\s*<</Type/Page[^s]`)

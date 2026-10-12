@@ -1,10 +1,10 @@
-module github.com/tdewolff/canvas
+module github.com/zc310/canvas
 
-go 1.26.0
+go 1.26.4
 
 require (
 	fyne.io/fyne/v2 v2.8.1
-	gioui.org v0.10.2
+	gioui.org v0.10.3
 	github.com/ByteArena/poly2tri-go v0.0.0-20170716161910-d102ad91854f
 	github.com/Kagami/go-avif v0.1.0
 	github.com/benoitkugler/textprocessing v0.0.6
@@ -19,14 +19,14 @@ require (
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
 	github.com/srwiley/scanx v0.0.0-20190309010443-e94503791388
 	github.com/tdewolff/argp v0.0.0-20260913163208-9b59948ed567
-	github.com/tdewolff/font v0.0.0-20260913163313-54f98bb59ee6
-	github.com/tdewolff/minify/v2 v2.24.17
+	github.com/zc310/font v0.0.0-20261012075210-d9401ca8d362
+	github.com/tdewolff/minify/v2 v2.24.19
 	github.com/tdewolff/parse/v2 v2.8.16
 	github.com/tdewolff/test v1.0.12
 	github.com/wcharczuk/go-chart/v2 v2.1.2
 	github.com/wroge/wgs84/v2 v2.0.0-alpha.20
-	golang.org/x/image v0.46.0
-	golang.org/x/text v0.42.0
+	golang.org/x/image v0.47.0
+	golang.org/x/text v0.43.0
 	gonum.org/v1/plot v0.17.0
 )
 
@@ -48,7 +48,6 @@ require (
 	github.com/benoitkugler/textlayout v0.3.2 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/fredbi/uri v1.1.1 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fyne-io/glfw-js v0.4.0 // indirect
 	github.com/fyne-io/image v0.1.1 // indirect
@@ -90,7 +89,7 @@ require (
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
 	github.com/stretchr/testify v1.12.1 // indirect
 	github.com/yuin/goldmark v1.8.6
-	golang.org/x/net v0.59.0
-	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/net v0.61.0
+	golang.org/x/sys v0.49.0 // indirect
 	star-tex.org/x/tex v0.7.1
 )

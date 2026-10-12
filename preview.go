@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 
-	cimage "github.com/tdewolff/canvas/image"
-	"github.com/tdewolff/canvas/text"
+	cimage "github.com/zc310/canvas/image"
+	"github.com/zc310/canvas/text"
 )
 
 func loadFont(name string, style FontStyle) ([]byte, error) {
@@ -26,7 +26,7 @@ func DrawPreview(ctx *Context) error {
 	if root == "" {
 		root = filepath.Join(os.Getenv("HOME"), "go")
 	}
-	root = filepath.Join(root, "src/github.com/tdewolff/canvas")
+	root = filepath.Join(root, "src/github.com/zc310/canvas")
 
 	latin, err := loadFont("DejaVu Serif, serif", FontRegular)
 	if err != nil {

@@ -9,7 +9,7 @@ import (
 	"image/png"
 	"io"
 
-	ccolor "github.com/tdewolff/canvas/color"
+	ccolor "github.com/zc310/canvas/color"
 )
 
 // ImageEncoding defines whether the embedded image shall be embedded as lossless (typically PNG) or lossy (typically JPG).

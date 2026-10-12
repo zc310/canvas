@@ -11,7 +11,7 @@ import (
 	"golang.org/x/image/math/f64"
 	"golang.org/x/image/vector"
 
-	"github.com/tdewolff/canvas"
+	"github.com/zc310/canvas"
 )
 
 func Draw(c *canvas.Canvas, resolution canvas.Resolution, colorSpace canvas.ColorSpace) *image.RGBA {

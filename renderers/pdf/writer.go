@@ -22,11 +22,11 @@ import (
 	"golang.org/x/text/encoding/charmap"
 	"golang.org/x/text/unicode/norm"
 
-	"github.com/tdewolff/canvas"
-	cimage "github.com/tdewolff/canvas/image"
-	"github.com/tdewolff/canvas/text"
-	ctext "github.com/tdewolff/canvas/text"
-	cfont "github.com/tdewolff/font"
+	"github.com/zc310/canvas"
+	cimage "github.com/zc310/canvas/image"
+	"github.com/zc310/canvas/text"
+	ctext "github.com/zc310/canvas/text"
+	cfont "github.com/zc310/font"
 )
 
 // TODO: Invalid graphics transparency, Group has a transparency S entry or the S entry is null
@@ -114,7 +114,7 @@ type pdfWriter struct {
 	pages      []pdfRef
 
 	page       *pdfPageWriter
-	fontSubset map[*canvas.Font]*canvas.FontSubsetter
+	fontSubset map[*canvas.Font]*pdfFontSubsetter
 	fontsH     map[*canvas.Font]pdfRef
 	fontsV     map[*canvas.Font]pdfRef
 	fontsStd   map[*canvas.Font]pdfRef
@@ -135,7 +135,7 @@ func newPDFWriter(writer io.Writer) *pdfWriter {
 	w := &pdfWriter{
 		w:          writer,
 		objOffsets: []int{0, 0, 0}, // catalog, metadata, page tree
-		fontSubset: map[*canvas.Font]*canvas.FontSubsetter{},
+		fontSubset: map[*canvas.Font]*pdfFontSubsetter{},
 		fontsH:     map[*canvas.Font]pdfRef{},
 		fontsV:     map[*canvas.Font]pdfRef{},
 		fontsStd:   map[*canvas.Font]pdfRef{},
@@ -446,7 +446,9 @@ func (w *pdfWriter) getFont(font *canvas.Font, vertical bool) pdfRef {
 	w.objOffsets = append(w.objOffsets, 0)
 	ref := pdfRef(len(w.objOffsets))
 	fonts[font] = ref
-	w.fontSubset[font] = canvas.NewFontSubsetter()
+	if w.fontSubset[font] == nil {
+		w.fontSubset[font] = newPDFFontSubsetter()
+	}
 	return ref
 }
 
@@ -464,24 +466,60 @@ func subsetTag(fontProgram []byte) string {
 }
 
 func (w *pdfWriter) writeFont(ref pdfRef, font *canvas.Font, vertical bool) {
-	// subset the font, we only write the used characters to the PDF CMap object to reduce its
-	// length. At the end of the function we add a CID to GID mapping to correctly select the
-	// right glyphID.
+	// Subset supported fonts, while keeping the original CFF program for multi
+	// Font DICTs. Page codes remain compact in either case; Encoding maps them
+	// to CFF CIDs, and CIDToGIDMap maps them to full TrueType glyph IDs.
 	sfnt := font.SFNT
 	glyphIDs := w.fontSubset[font].List() // also when not subsetting, to minimize cmap table
-	if w.subset {
-		if sfnt.IsCFF && sfnt.CFF != nil {
-			sfnt.CFF.SetGlyphNames(nil)
-		}
-
+	if err := w.fontSubset[font].err; err != nil {
+		w.err = err
+		return
+	}
+	subset := w.subset
+	if sfnt.IsCFF && sfnt.CFF != nil && 1 < sfnt.CFF.NumFontDicts() {
+		// Reindexing global/local subroutines across Font DICTs is unsupported.
+		// Keep the original font program, FDSelect, charset and subroutines.
+		subset = false
+	}
+	if subset {
 		sfntSubset, err := sfnt.Subset(glyphIDs, cfont.SubsetOptions{Tables: cfont.KeepPDFTables})
 		if err == nil {
 			sfnt = sfntSubset
 		} else {
-			panic("font subsetting failed: " + err.Error())
+			w.err = fmt.Errorf("font subsetting failed: %w", err)
+			return
 		}
 	}
 	fontProgram := sfnt.Write()
+	var cffCIDs []uint16
+	cffCIDKeyed := false
+	cidSystemInfo := pdfDict{"Registry": "Adobe", "Ordering": "Identity", "Supplement": 0}
+	if sfnt.IsCFF && sfnt.CFF != nil {
+		registry, ordering, supplement, cidKeyed := sfnt.CFF.CIDSystemInfo()
+		cffCIDKeyed = cidKeyed
+		if cidKeyed {
+			cidSystemInfo = pdfDict{"Registry": registry, "Ordering": ordering, "Supplement": supplement}
+			// Embed the original CFF directly as CIDFontType0C. OpenType streams
+			// make some readers derive a GID map from ToUnicode instead of the
+			// CFF charset when the Encoding CMap is nonidentity.
+			fontProgram = sfnt.Tables["CFF "]
+		}
+		cffCIDs = make([]uint16, len(glyphIDs))
+		for i, glyphID := range glyphIDs {
+			if subset {
+				glyphID = uint16(i)
+			}
+			cid := glyphID // name-keyed OpenType CFF uses glyph IDs
+			if cidKeyed {
+				var ok bool
+				if cid, ok = sfnt.CFF.GlyphCID(glyphID); !ok {
+					w.err = fmt.Errorf("CFF charset has no CID for glyph %d", glyphID)
+					return
+				}
+			}
+			cffCIDs[i] = cid
+		}
+	}
 
 	// calculate the character widths for the W array and shorten it
 	f := 1000.0 / float64(font.SFNT.Head.UnitsPerEm)
@@ -517,45 +555,27 @@ func (w *pdfWriter) writeFont(ref pdfRef, font *canvas.Font, vertical bool) {
 		}
 		W = append(W, i, arr)
 	}
-
-	// create ToUnicode CMap
-	var bfRange, bfChar strings.Builder
-	var bfRangeCount, bfCharCount int
-	startGlyphID := uint16(0)
-	startUnicode := uint32('\uFFFD')
-	length := uint16(1)
-	for subsetGlyphID, glyphID := range glyphIDs[1:] {
-		if rs := font.SFNT.GlyphToUnicode(glyphID); 0 < len(rs) {
-			unicode := uint32(rs[0])
-			if 0x010000 <= unicode && unicode <= 0x10FFFF {
-				// UTF-16 surrogates
-				unicode -= 0x10000
-				unicode = (0xD800+(unicode>>10)&0x3FF)<<16 + 0xDC00 + unicode&0x3FF
-			}
-			if uint16(subsetGlyphID+1) == startGlyphID+length && unicode == startUnicode+uint32(length) {
-				length++
-			} else {
-				if 1 < length {
-					fmt.Fprintf(&bfRange, "\n<%04X> <%04X> <%04X>", startGlyphID, startGlyphID+length-1, startUnicode)
-					bfRangeCount++
-				} else {
-					fmt.Fprintf(&bfChar, "\n<%04X> <%04X>", startGlyphID, startUnicode)
-					bfCharCount++
-				}
-				startGlyphID = uint16(subsetGlyphID + 1)
-				startUnicode = unicode
-				length = 1
+	if cffCIDs != nil {
+		// W is indexed by CID, while ToUnicode and page strings use the compact
+		// character codes. CIDToGIDMap is defined only for CIDFontType2.
+		byCID := make(map[uint16]int, len(cffCIDs))
+		for i, cid := range cffCIDs {
+			byCID[cid] = widths[i]
+		}
+		ids := make([]int, 0, len(byCID))
+		for cid := range byCID {
+			ids = append(ids, int(cid))
+		}
+		sort.Ints(ids)
+		W = pdfArray{}
+		for _, cid := range ids {
+			if width := byCID[uint16(cid)]; width != DW {
+				W = append(W, cid, pdfArray{width})
 			}
 		}
 	}
-	if 1 < length {
-		fmt.Fprintf(&bfRange, "\n<%04X> <%04X> <%04X>", startGlyphID, startGlyphID+length-1, startUnicode)
-		bfRangeCount++
-	} else {
-		fmt.Fprintf(&bfChar, "\n<%04X> <%04X>", startGlyphID, startUnicode)
-		bfCharCount++
-	}
 
+	// create ToUnicode CMap
 	toUnicode := bytes.Buffer{}
 	fmt.Fprintf(&toUnicode, `/CIDInit /ProcSet findresource begin
 12 dict begin
@@ -565,13 +585,24 @@ begincmap
 /CMapType 2 def
 1 begincodespacerange
 <0000> <FFFF> endcodespacerange`)
-	if 0 < bfRangeCount {
-		fmt.Fprintf(&toUnicode, `
-%d beginbfrange%s endbfrange`, bfRangeCount, bfRange.String())
-	}
-	if 0 < bfCharCount {
-		fmt.Fprintf(&toUnicode, `
-%d beginbfchar%s endbfchar`, bfCharCount, bfChar.String())
+	for start := 1; start < len(glyphIDs); start += 100 {
+		end := min(start+100, len(glyphIDs))
+		fmt.Fprintf(&toUnicode, "\n%d beginbfchar", end-start)
+		for code := start; code < end; code++ {
+			value, known := w.fontSubset[font].Text(code)
+			if !known {
+				value = "\uFFFD"
+				if runes := font.SFNT.GlyphToUnicode(glyphIDs[code]); len(runes) > 0 {
+					value = string(runes[0])
+				}
+			}
+			fmt.Fprintf(&toUnicode, "\n<%04X> <", code)
+			for _, unit := range utf16.Encode([]rune(value)) {
+				fmt.Fprintf(&toUnicode, "%04X", unit)
+			}
+			toUnicode.WriteByte('>')
+		}
+		toUnicode.WriteString("\nendbfchar")
 	}
 	fmt.Fprintf(&toUnicode, `
 endcmap
@@ -607,6 +638,9 @@ end`)
 		cidSubtype = "CIDFontType0"
 		fontfileKey = "FontFile3"
 		fontProgramStream.dict["Subtype"] = pdfName("OpenType")
+		if cffCIDKeyed {
+			fontProgramStream.dict["Subtype"] = pdfName("CIDFontType0C")
+		}
 		fontfileRef = w.writeObject(fontProgramStream)
 	}
 
@@ -616,21 +650,44 @@ end`)
 		name = records[0].String()
 	}
 	baseFont := strings.ReplaceAll(name, " ", "")
-	if w.subset {
+	if subset {
 		baseFont = subsetTag(fontProgram) + "+" + baseFont
 	}
 
-	encoding := "Identity-H"
+	var encoding interface{} = pdfName("Identity-H")
 	if vertical {
-		encoding = "Identity-V"
+		encoding = pdfName("Identity-V")
+	}
+	if cffCIDs != nil {
+		mode := 0
+		if vertical {
+			mode = 1
+		}
+		var cmap strings.Builder
+		fmt.Fprintf(&cmap, "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapName /CanvasGlyphs def\n/CMapType 1 def\n/WMode %d def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n", mode)
+		for start := 0; start < len(cffCIDs); start += 100 {
+			end := min(start+100, len(cffCIDs))
+			fmt.Fprintf(&cmap, "%d begincidchar\n", end-start)
+			for code := start; code < end; code++ {
+				fmt.Fprintf(&cmap, "<%04X> %d\n", code, cffCIDs[code])
+			}
+			cmap.WriteString("endcidchar\n")
+		}
+		cmap.WriteString("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n")
+		stream := pdfStream{dict: pdfDict{"Type": pdfName("CMap"), "CMapName": pdfName("CanvasGlyphs"), "CIDSystemInfo": cidSystemInfo, "WMode": mode}, stream: []byte(cmap.String())}
+		if w.compress {
+			stream.dict["Filter"] = pdfFilterFlate
+		}
+		encoding = w.writeObject(stream)
 	}
 
-	// in order to support more than 256 characters, we need to use a CIDFont dictionary which must be inside a Type0 font. Character codes in the stream are glyph IDs, however for subsetted fonts they are the _old_ glyph IDs, which is why we need the CIDToGIDMap
+	// Type0 fonts support two-byte page codes. Their descendant metrics and
+	// CFF charset are indexed by CID; ToUnicode remains indexed by page code.
 	dict := pdfDict{
 		"Type":      pdfName("Font"),
 		"Subtype":   pdfName("Type0"),
 		"BaseFont":  pdfName(baseFont),
-		"Encoding":  pdfName(encoding), // map character codes in the stream to CID with identity encoding, we additionally map CID to GID in the descendant font when subsetting, otherwise that is also identity
+		"Encoding":  encoding,
 		"ToUnicode": toUnicodeRef,
 		"DescendantFonts": pdfArray{pdfDict{
 			"Type":     pdfName("Font"),
@@ -639,11 +696,7 @@ end`)
 			"DW":       DW,
 			"W":        W,
 			//"CIDToGIDMap": pdfName("Identity"),
-			"CIDSystemInfo": pdfDict{
-				"Registry":   "Adobe",
-				"Ordering":   "Identity",
-				"Supplement": 0,
-			},
+			"CIDSystemInfo": cidSystemInfo,
 			"FontDescriptor": pdfDict{
 				"Type":     pdfName("FontDescriptor"),
 				"FontName": pdfName(baseFont),
@@ -664,7 +717,7 @@ end`)
 		}},
 	}
 
-	if !w.subset {
+	if !subset && font.SFNT.IsTrueType {
 		cidToGIDMap := make([]byte, 2*len(glyphIDs))
 		for subsetGlyphID, glyphID := range glyphIDs {
 			j := int(subsetGlyphID) * 2
@@ -1135,6 +1188,9 @@ func (w *pdfPageWriter) SetFill(fill canvas.Paint, m canvas.Matrix) {
 	} else {
 		a := float64(fill.Color.A) / 255.0
 		if fill.Equal(w.fill) {
+			// Stroke and image paints may change the shared opacity even when
+			// the cached fill color is unchanged.
+			w.SetAlpha(a)
 			return
 		} else if fill.Color.A == 0 {
 			fmt.Fprintf(w, " 0 g")
@@ -1158,6 +1214,8 @@ func (w *pdfPageWriter) SetStroke(stroke canvas.Paint, m canvas.Matrix) {
 	} else {
 		a := float64(stroke.Color.A) / 255.0
 		if stroke.Equal(w.stroke) {
+			// Restore opacity independently of the cached stroking color.
+			w.SetAlpha(a)
 			return
 		} else if stroke.Color.A == 0 {
 			fmt.Fprintf(w, " 0 G")
@@ -1398,7 +1456,7 @@ func (w *pdfPageWriter) WriteText(mode canvas.WritingMode, TJ ...interface{}) {
 			}
 		} else {
 			for _, glyph := range glyphs {
-				glyphID := subset.Get(glyph.ID)
+				glyphID := subset.Get(glyph.ID, glyph.Text)
 				for _, c := range []uint8{uint8((glyphID & 0xff00) >> 8), uint8(glyphID & 0x00ff)} {
 					if c == '\n' {
 						w.WriteByte('\\')
@@ -1431,6 +1489,7 @@ func (w *pdfPageWriter) WriteText(mode canvas.WritingMode, TJ ...interface{}) {
 		glyphs := make([]ctext.Glyph, len(rs))
 		for i, r := range rs {
 			glyphs[i].ID = w.font.SFNT.GlyphIndex(r)
+			glyphs[i].Text = string(r)
 		}
 		write(glyphs)
 	}

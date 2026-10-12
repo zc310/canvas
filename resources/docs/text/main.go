@@ -5,8 +5,8 @@ import (
 	"image/png"
 	"os"
 
-	"github.com/tdewolff/canvas"
-	"github.com/tdewolff/canvas/renderers"
+	"github.com/zc310/canvas"
+	"github.com/zc310/canvas/renderers"
 )
 
 var fontFamily, fontLatin, fontArabic, fontDevanagari, fontMongolian, fontCJK *canvas.FontFamily

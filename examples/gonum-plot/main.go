@@ -3,8 +3,8 @@ package main
 import (
 	"log"
 
-	"github.com/tdewolff/canvas"
-	"github.com/tdewolff/canvas/renderers"
+	"github.com/zc310/canvas"
+	"github.com/zc310/canvas/renderers"
 	"gonum.org/v1/plot"
 	"gonum.org/v1/plot/plotter"
 	"gonum.org/v1/plot/vg"

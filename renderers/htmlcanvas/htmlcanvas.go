@@ -7,7 +7,7 @@ import (
 	"math"
 	"syscall/js"
 
-	"github.com/tdewolff/canvas"
+	"github.com/zc310/canvas"
 )
 
 // HTMLCanvas is an HTMLCanvas renderer.
