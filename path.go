@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/srwiley/scanx"
 	"golang.org/x/image/math/fixed"
 	"golang.org/x/image/vector"
 
@@ -2434,55 +2433,6 @@ func fixedPoint26_6(x, y float64) fixed.Point26_6 {
 	return fixed.Point26_6{
 		fixed.Int26_6(x*Scale + 0.5),
 		fixed.Int26_6(y*Scale + 0.5),
-	}
-}
-
-// ToScanxScanner rasterizes the path to *scanx.Scanner using the given rasterizer, height, and resolution.
-func (p *Path) ToScanxScanner(ras *scanx.Scanner, dy float64, resolution Resolution) {
-	dpmm := resolution.DPMM()
-	tolerance := PixelTolerance / dpmm // tolerance of 1/10 of a pixel
-	var q *Path                        // reused buffer for flattened curves
-	for i := 0; i < len(p.d); {
-		cmd := p.d[i]
-		switch cmd {
-		case MoveToCmd:
-			ras.Start(fixedPoint26_6(p.d[i+1]*dpmm, dy-p.d[i+2]*dpmm))
-		case LineToCmd:
-			ras.Line(fixedPoint26_6(p.d[i+1]*dpmm, dy-p.d[i+2]*dpmm))
-		case QuadToCmd, CubeToCmd, ArcToCmd:
-			// flatten
-			if q == nil {
-				q = &Path{d: make([]float64, 0, 32)}
-			}
-			q.d = q.d[:0]
-			var start Point
-			if 0 < i {
-				start = Point{p.d[i-3], p.d[i-2]}
-			}
-			if cmd == QuadToCmd {
-				cp := Point{p.d[i+1], p.d[i+2]}
-				end := Point{p.d[i+3], p.d[i+4]}
-				flattenQuadraticBezierTo(q, start, cp, end, tolerance)
-			} else if cmd == CubeToCmd {
-				cp1 := Point{p.d[i+1], p.d[i+2]}
-				cp2 := Point{p.d[i+3], p.d[i+4]}
-				end := Point{p.d[i+5], p.d[i+6]}
-				flattenCubicBezierTo(q, start, cp1, cp2, end, tolerance)
-			} else {
-				rx, ry, phi := p.d[i+1], p.d[i+2], p.d[i+3]
-				large, sweep := toArcFlags(p.d[i+4])
-				end := Point{p.d[i+5], p.d[i+6]}
-				q = flattenEllipticArc(start, rx, ry, phi, large, sweep, end, tolerance)
-			}
-			for j := 4; j < len(q.d); j += 4 {
-				ras.Line(fixedPoint26_6(q.d[j+1]*dpmm, dy-q.d[j+2]*dpmm))
-			}
-		case CloseCmd:
-			ras.Line(fixedPoint26_6(p.d[i+1]*dpmm, dy-p.d[i+2]*dpmm))
-		default:
-			panic("quadratic and cubic Béziers and arcs should have been replaced")
-		}
-		i += cmdLen(cmd)
 	}
 }
 
