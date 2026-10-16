@@ -3,7 +3,7 @@ module github.com/zc310/canvas
 go 1.26.4
 
 require (
-	fyne.io/fyne/v2 v2.8.1
+	fyne.io/fyne/v2 v2.8.2
 	gioui.org v0.10.3
 	github.com/ByteArena/poly2tri-go v0.0.0-20170716161910-d102ad91854f
 	github.com/Kagami/go-avif v0.1.0
@@ -19,12 +19,12 @@ require (
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
 	github.com/srwiley/scanx v0.0.0-20190309010443-e94503791388
 	github.com/tdewolff/argp v0.0.0-20260913163208-9b59948ed567
-	github.com/zc310/font v0.0.0-20261012075210-d9401ca8d362
-	github.com/tdewolff/minify/v2 v2.24.19
-	github.com/tdewolff/parse/v2 v2.8.16
+	github.com/tdewolff/minify/v2 v2.24.21
+	github.com/tdewolff/parse/v2 v2.8.18
 	github.com/tdewolff/test v1.0.12
 	github.com/wcharczuk/go-chart/v2 v2.1.2
 	github.com/wroge/wgs84/v2 v2.0.0-alpha.20
+	github.com/zc310/font v0.0.0-20261015234500-7f44c41494e0
 	golang.org/x/image v0.47.0
 	golang.org/x/text v0.43.0
 	gonum.org/v1/plot v0.17.0
@@ -43,7 +43,7 @@ require (
 	github.com/BurntSushi/xgb v0.0.0-20210121224620-deaf085860bc // indirect
 	github.com/BurntSushi/xgbutil v0.0.0-20190907113008-ad855c713046 // indirect
 	github.com/ajstarks/svgo v0.0.0-20211024235047-1546f124cd8b // indirect
-	github.com/andybalholm/brotli v1.2.2 // indirect
+	github.com/andybalholm/brotli v1.2.6 // indirect
 	github.com/anthonynsimon/bild v0.17.0 // indirect
 	github.com/benoitkugler/textlayout v0.3.2 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
@@ -51,8 +51,8 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fyne-io/glfw-js v0.4.0 // indirect
 	github.com/fyne-io/image v0.1.1 // indirect
-	github.com/fyne-io/oksvg v0.2.0 // indirect
-	github.com/go-gl/glfw/v3.4/glfw v0.1.0-pre.1.0.20260707082822-2a407d02d01a // indirect
+	github.com/fyne-io/oksvg v0.2.1-0.20260918172519-a9af55fa95d9 // indirect
+	github.com/go-gl/glfw/v3.4/glfw v0.1.0-pre.2 // indirect
 	github.com/go-sql-driver/mysql v1.9.3 // indirect
 	github.com/go-text/render v0.2.1 // indirect
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
