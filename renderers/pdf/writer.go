@@ -113,22 +113,26 @@ type pdfWriter struct {
 	objOffsets []int
 	pages      []pdfRef
 
-	page       *pdfPageWriter
-	fontSubset map[*canvas.Font]*pdfFontSubsetter
-	fontsH     map[*canvas.Font]pdfRef
-	fontsV     map[*canvas.Font]pdfRef
-	fontsStd   map[*canvas.Font]pdfRef
-	images     map[image.Image]pdfRef
-	anchors    []pdfAnchor
-	outlines   []pdfOutline
-	compress   bool
-	subset     bool
-	title      string
-	subject    string
-	keywords   string
-	author     string
-	creator    string
-	lang       string
+	page        *pdfPageWriter
+	fontSubset  map[*canvas.Font]*pdfFontSubsetter
+	fontsH      map[*canvas.Font]pdfRef
+	fontsV      map[*canvas.Font]pdfRef
+	fontsStd    map[*canvas.Font]pdfRef
+	images      map[image.Image]pdfRef
+	forms       map[*canvas.Canvas]pdfRef
+	formBytes   int64
+	flateWriter *zlib.Writer
+	flateLevel  int
+	anchors     []pdfAnchor
+	outlines    []pdfOutline
+	compress    bool
+	subset      bool
+	title       string
+	subject     string
+	keywords    string
+	author      string
+	creator     string
+	lang        string
 }
 
 func newPDFWriter(writer io.Writer) *pdfWriter {
@@ -342,9 +346,14 @@ func (w *pdfWriter) writeVal(i interface{}) {
 				fmt.Fprintf(&b2, "~>")
 				b = b2.Bytes()
 			case pdfFilterFlate:
-				w, _ := zlib.NewWriterLevel(&b2, flateLevel)
-				w.Write(b)
-				w.Close()
+				if w.flateWriter == nil || w.flateLevel != flateLevel {
+					w.flateWriter, _ = zlib.NewWriterLevel(&b2, flateLevel)
+					w.flateLevel = flateLevel
+				} else {
+					w.flateWriter.Reset(&b2)
+				}
+				w.flateWriter.Write(b)
+				w.flateWriter.Close()
 				b = b2.Bytes()
 			case pdfFilterStoredFlate:
 				b2.Write(b)
@@ -905,6 +914,11 @@ func (w *pdfWriter) writeOutlines() (pdfRef, bool) {
 
 // Close finished the document.
 func (w *pdfWriter) Close() error {
+	defer func() {
+		w.forms = nil
+		w.formBytes = 0
+		w.flateWriter = nil
+	}()
 	// TODO: support cross reference table streams and compressed objects for all dicts
 	if w.page != nil {
 		w.pages = append(w.pages, w.page.writePage(pdfRef(3)))
@@ -1064,7 +1078,17 @@ func (w *pdfWriter) NewPage(width, height float64) *pdfPageWriter {
 	}
 
 	// for defaults see https://help.adobe.com/pdfl_sdk/15/PDFL_SDK_HTMLHelp/PDFL_SDK_HTMLHelp/API_References/PDFL_API_Reference/PDFEdit_Layer/General.html#_t_PDEGraphicState
-	w.page = &pdfPageWriter{
+	w.page = w.newContentWriter(width, height)
+	m := canvas.Identity.Scale(ptPerMm, ptPerMm)
+	fmt.Fprintf(w.page, " %v %v %v %v %v %v cm", dec(m[0][0]), dec(m[1][0]), dec(m[0][1]), dec(m[1][1]), dec(m[0][2]), dec(m[1][2]))
+	return w.page
+}
+
+// newContentWriter creates an independent graphics state and resource dictionary
+// for a page or Form. Form coordinates use the caller's millimetre coordinate
+// system, so only NewPage writes the initial millimetre-to-point transform.
+func (w *pdfWriter) newContentWriter(width, height float64) *pdfPageWriter {
+	return &pdfPageWriter{
 		Buffer:         &bytes.Buffer{},
 		pdf:            w,
 		width:          width,
@@ -1088,10 +1112,6 @@ func (w *pdfWriter) NewPage(width, height float64) *pdfPageWriter {
 		textCharSpace:  0.0,
 		textRenderMode: 0,
 	}
-
-	m := canvas.Identity.Scale(ptPerMm, ptPerMm)
-	fmt.Fprintf(w.page, " %v %v %v %v %v %v cm", dec(m[0][0]), dec(m[1][0]), dec(m[0][1]), dec(m[1][1]), dec(m[0][2]), dec(m[1][2]))
-	return w.page
 }
 
 func (w *pdfPageWriter) writePage(parent pdfRef) pdfRef {

@@ -69,6 +69,7 @@ func (r *PDF) SetLang(lang string) {
 // NewPage starts adds a new page where further rendering will be written to.
 func (r *PDF) NewPage(width, height float64) {
 	r.w = r.w.pdf.NewPage(width, height)
+	r.width, r.height = width, height
 }
 
 // AddAnchor adds an anchor that can be referenced by a link (see AddLink). The rectangle is the area to be referenced. If the width and

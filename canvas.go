@@ -706,10 +706,11 @@ func (c *Context) DrawImage(x, y float64, img image.Image, resolution Resolution
 ////////////////////////////////////////////////////////////////
 
 type layer struct {
-	// path, text OR img is set
-	path *Path
-	text *Text
-	img  image.Image
+	// Exactly one of path, text, img or scene is set.
+	path  *Path
+	text  *Text
+	img   image.Image
+	scene *Canvas
 
 	m     Matrix
 	style Style // only for path
@@ -766,6 +767,52 @@ func (c *Canvas) RenderImage(img image.Image, m Matrix) {
 	c.layers[c.zindex] = append(c.layers[c.zindex], layer{img: img, m: m})
 }
 
+// RenderCanvas records a reusable canvas without copying its drawing operations.
+// scene must remain immutable after this call and must not refer to c, directly
+// or indirectly. Renderers may embed it once and reuse it, as with PDF Forms;
+// other renderers replay its operations normally.
+func (c *Canvas) RenderCanvas(scene *Canvas, m Matrix) {
+	if scene == nil || scene.Empty() {
+		return
+	}
+	if c.layers == nil {
+		c.layers = map[int][]layer{}
+	}
+	c.layers[c.zindex] = append(c.layers[c.zindex], layer{scene: scene, m: m})
+}
+
+// MemorySize estimates the memory retained by drawing operations, excluding
+// shared font programs. Reusable canvases and images may be counted more than
+// once; the conservative estimate is intended for bounded rendering caches.
+func (c *Canvas) MemorySize() int64 {
+	var size int64 = 128
+	for _, layers := range c.layers {
+		size += int64(cap(layers)) * 256
+		for _, l := range layers {
+			if l.path != nil {
+				size += int64(cap(l.path.d)) * 8
+			} else if l.text != nil {
+				l.text.WalkSpans(func(_, _ float64, span TextSpan) {
+					size += 256 + int64(len(span.Text)) + int64(len(span.Glyphs))*64
+					for _, object := range span.Objects {
+						size += object.Canvas.MemorySize()
+					}
+				})
+			} else if l.img != nil {
+				if weighted, ok := l.img.(interface{ Weight() int64 }); ok {
+					size += weighted.Weight()
+				} else {
+					bounds := l.img.Bounds()
+					size += int64(bounds.Dx()) * int64(bounds.Dy()) * 4
+				}
+			} else if l.scene != nil {
+				size += l.scene.MemorySize()
+			}
+		}
+	}
+	return size
+}
+
 // Empty return true if the canvas is empty.
 func (c *Canvas) Empty() bool {
 	return len(c.layers) == 0
@@ -819,6 +866,8 @@ func (c *Canvas) Bounds() Rect {
 			} else if l.img != nil {
 				size := l.img.Bounds().Size()
 				bounds = Rect{0.0, 0.0, float64(size.X), float64(size.Y)}
+			} else if l.scene != nil {
+				bounds = l.scene.Bounds()
 			}
 			if !bounds.Empty() {
 				bounds = bounds.Transform(l.m)
@@ -865,6 +914,12 @@ func (c *Canvas) RenderViewTo(r Renderer, view Matrix) {
 				r.RenderText(l.text, m)
 			} else if l.img != nil {
 				r.RenderImage(l.img, m)
+			} else if l.scene != nil {
+				if reusable, ok := r.(interface{ RenderCanvas(*Canvas, Matrix) }); ok {
+					reusable.RenderCanvas(l.scene, m)
+				} else {
+					l.scene.RenderViewTo(r, m)
+				}
 			}
 		}
 	}

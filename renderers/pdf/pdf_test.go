@@ -3,18 +3,22 @@ package pdf
 import (
 	"bytes"
 	"compress/zlib"
-	"fmt"
+	"encoding/binary"
 	"image"
 	"image/color"
 	"image/png"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/tdewolff/test"
 	"github.com/zc310/canvas"
 	cimage "github.com/zc310/canvas/image"
-	"github.com/tdewolff/test"
 )
 
 func TestPDF(t *testing.T) {
@@ -112,21 +116,24 @@ const fontDir = "../../resources/"
 
 func TestPDFText(t *testing.T) {
 	t.Run("without_subset", func(t *testing.T) {
-		testPDFText(t, false, 521000, "TestPDFText_no_subset.pdf")
+		testPDFText(t, false)
 	})
 	t.Run("with_subset", func(t *testing.T) {
-		testPDFText(t, true, 9500, "TestPDFText_subset_fonts.pdf")
+		testPDFText(t, true)
 	})
 }
 
-func testPDFText(t *testing.T, subsetFonts bool, expectedSize int, filename string) {
+func testPDFText(t *testing.T, subsetFonts bool) {
+	t.Helper()
 	dejaVuSerif := canvas.NewFontFamily("dejavu-serif")
-	err := dejaVuSerif.LoadFontFile(fontDir+"DejaVuSerif.ttf", canvas.FontRegular)
-	test.Error(t, err)
+	if err := dejaVuSerif.LoadFontFile(fontDir+"DejaVuSerif.ttf", canvas.FontRegular); err != nil {
+		t.Fatal(err)
+	}
 
 	ebGaramond := canvas.NewFontFamily("eb-garamond")
-	err = ebGaramond.LoadFontFile(fontDir+"EBGaramond12-Regular.otf", canvas.FontRegular)
-	test.Error(t, err)
+	if err := ebGaramond.LoadFontFile(fontDir+"EBGaramond12-Regular.otf", canvas.FontRegular); err != nil {
+		t.Fatal(err)
+	}
 
 	dejaVu8 := dejaVuSerif.Face(8, canvas.Black, canvas.FontRegular, canvas.FontNormal)
 	dejaVu12 := dejaVuSerif.Face(12, canvas.Red, canvas.FontRegular, canvas.FontNormal, canvas.FontUnderline)
@@ -141,19 +148,137 @@ func testPDFText(t *testing.T, subsetFonts bool, expectedSize int, filename stri
 	text := rt.ToText(180, 20.0, canvas.Justify, canvas.Top, nil)
 
 	buf := &bytes.Buffer{}
-	var w io.Writer = buf
-	if testing.Verbose() {
-		f, _ := os.Create(filename) // for manual inspection
-		defer f.Close()
-		w = io.MultiWriter(buf, f)
-	}
-
-	pdf := New(w, 210, 297, &Options{Compress: true, SubsetFonts: subsetFonts})
+	pdf := New(buf, 210, 297, &Options{Compress: true, SubsetFonts: subsetFonts})
 	pdf.RenderText(text, canvas.Identity.Translate(15, 250))
-	pdf.Close()
+	if err := pdf.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(buf.Bytes(), []byte("%PDF-")) || !bytes.HasSuffix(buf.Bytes(), []byte("%%EOF\n")) {
+		t.Fatal("PDF header or trailer missing")
+	}
+	if len(pdf.w.pdf.fontsH) != 2 {
+		t.Fatalf("embedded fonts = %d, want TrueType and CFF", len(pdf.w.pdf.fontsH))
+	}
+	// Inspect the embedded programs instead of depending on compressor-specific
+	// file sizes. PDF subsets may omit tables required by standalone font parsers.
+	for _, source := range []*canvas.Font{dejaVu8.Font, garamond10.Font} {
+		ref, ok := pdf.w.pdf.fontsH[source]
+		if !ok {
+			t.Fatalf("font %q was not embedded", source.Name())
+		}
+		program := pdfTextFontProgram(t, buf.Bytes(), pdf.w.pdf, ref)
+		outline := "glyf"
+		if source.IsCFF {
+			outline = "CFF "
+		}
+		count := pdfTextFontGlyphCount(t, program, outline)
+		if subsetFonts {
+			if count <= 1 || count >= source.SFNT.NumGlyphs() {
+				t.Errorf("font %q subset has %d glyphs, original has %d", source.Name(), count, source.SFNT.NumGlyphs())
+			}
+		} else if !bytes.Equal(program, source.SFNT.Write()) {
+			t.Errorf("font %q was changed despite disabling subsetting", source.Name())
+		}
+	}
+	t.Run("text extraction", func(t *testing.T) {
+		tool, err := exec.LookPath("pdftotext")
+		if err != nil {
+			t.Skip("pdftotext unavailable; skipping text extraction check")
+		}
+		cmd := exec.CommandContext(t.Context(), tool, "-", "-")
+		cmd.Stdin = bytes.NewReader(buf.Bytes())
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("pdftotext: %v: %s", err, output)
+		}
+		want := "dejaVu8 glyphspacing dejaVu12sub garamond10"
+		if got := strings.Join(strings.Fields(string(output)), " "); got != want {
+			t.Fatalf("extracted text = %q, want %q", got, want)
+		}
+	})
+	if testing.Verbose() {
+		path := filepath.Join(t.TempDir(), "text.pdf")
+		if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("PDF saved to temporary test directory: %s", path)
+	}
+}
 
-	written := len(buf.Bytes())
-	test.That(t, expectedSize-1000 < written && written < expectedSize+1000, fmt.Sprintf("unexpected rendering result length %v != %v±1000", written, expectedSize))
+// Resolve the font descriptor's program reference using the writer's object
+// offsets, and use the declared stream length to locate the binary data.
+func pdfTextFontProgram(t *testing.T, data []byte, writer *pdfWriter, ref pdfRef) []byte {
+	t.Helper()
+	object := data[writer.objOffsets[ref-1]:]
+	end := bytes.Index(object, []byte("\nendobj"))
+	if end < 0 {
+		t.Fatal("font object end missing")
+	}
+	match := regexp.MustCompile(`/FontFile[23] (\d+) 0 R`).FindSubmatch(object[:end])
+	if len(match) != 2 {
+		t.Fatal("font program reference missing")
+	}
+	programRef, err := strconv.Atoi(string(match[1]))
+	if err != nil || programRef < 1 || programRef > len(writer.objOffsets) {
+		t.Fatalf("invalid font program reference: %q", match[1])
+	}
+	object = data[writer.objOffsets[programRef-1]:]
+	start := bytes.Index(object, []byte("stream\n"))
+	if start < 0 {
+		t.Fatal("font program stream missing")
+	}
+	match = regexp.MustCompile(`/Length (\d+)`).FindSubmatch(object[:start])
+	if len(match) != 2 || !bytes.Contains(object[:start], []byte("/Filter/FlateDecode")) {
+		t.Fatal("compressed font stream length or filter missing")
+	}
+	length, err := strconv.Atoi(string(match[1]))
+	start += len("stream\n")
+	if err != nil || length <= 0 || length > len(object)-start {
+		t.Fatalf("invalid font stream length: %q", match[1])
+	}
+	reader, err := zlib.NewReader(bytes.NewReader(object[start : start+length]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	program, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return program
+}
+
+// Read maxp directly: PDF subsets do not need standalone-font metadata such as
+// name or post tables. Also check table bounds and the expected outline format.
+func pdfTextFontGlyphCount(t *testing.T, program []byte, outline string) uint16 {
+	t.Helper()
+	if len(program) < 12 {
+		t.Fatal("font program header missing")
+	}
+	tables := int(binary.BigEndian.Uint16(program[4:6]))
+	if tables == 0 || tables > (len(program)-12)/16 {
+		t.Fatal("invalid font table directory")
+	}
+	var count uint16
+	hasOutline := false
+	for i := 0; i < tables; i++ {
+		record := program[12+i*16 : 12+(i+1)*16]
+		offset := uint64(binary.BigEndian.Uint32(record[8:12]))
+		length := uint64(binary.BigEndian.Uint32(record[12:16]))
+		if offset+length > uint64(len(program)) {
+			t.Fatalf("font table %q exceeds program bounds", record[:4])
+		}
+		if string(record[:4]) == outline && length > 0 {
+			hasOutline = true
+		}
+		if string(record[:4]) == "maxp" && length >= 6 {
+			count = binary.BigEndian.Uint16(program[offset+4 : offset+6])
+		}
+	}
+	if count == 0 || !hasOutline {
+		t.Fatalf("font has %d glyphs, %s outlines present=%v", count, outline, hasOutline)
+	}
+	return count
 }
 
 func TestPDFImage(t *testing.T) {

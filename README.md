@@ -57,6 +57,20 @@ Additionally, it has bindings to be used as renderer for:
 
 See [Renderers](https://github.com/tdewolff/canvas/wiki/Renderers) for more information.
 
+### Reusable drawing content
+
+Use `page.RenderCanvas(scene, matrix)` to record a reusable canvas, such as a
+page template, without copying its drawing operations. Keep `scene` immutable
+after recording it and avoid cyclic canvas references. Raster, SVG and other
+renderers replay the scene normally; the PDF renderer embeds it as a Form
+XObject and reuses that object across pages of the same PDF. Fonts, images and
+transparency remain available inside the Form. Links and destinations belong
+to the enclosing page and should be added separately for each occurrence.
+
+Renderer adapters can use `pdf.PDF.RenderCanvasWith` to apply their own drawing
+logic while building the Form. The callback runs synchronously on the first
+occurrence only; subsequent references use the recorded PDF content.
+
 ### Stable path boolean operations
 Numerically stable (!) path boolean operations, supporting AND, OR, XOR, NOT, and DIV operations in `O((n+k) log n)`, with `n` the number of segments and `k` the number of intersections. This is very fast and allows handling huge paths. It uses 64-bit floating-point precision for highly accurate computation and employs an additional strategy to ensure numerical stability. In particular:
 - Allows paths, subject or clipping, with any number of (overlapping) contours.
