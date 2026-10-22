@@ -1,6 +1,6 @@
 module github.com/zc310/canvas
 
-go 1.26.4
+go 1.26
 
 require (
 	fyne.io/fyne/v2 v2.8.2
@@ -19,11 +19,12 @@ require (
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
 	github.com/srwiley/scanx v0.0.0-20190309010443-e94503791388
 	github.com/tdewolff/argp v0.0.0-20260913163208-9b59948ed567
-	github.com/tdewolff/minify/v2 v2.24.21
-	github.com/tdewolff/parse/v2 v2.8.18
+	github.com/tdewolff/minify/v2 v2.24.22
+	github.com/tdewolff/parse/v2 v2.8.19
 	github.com/tdewolff/test v1.0.12
 	github.com/wcharczuk/go-chart/v2 v2.1.2
 	github.com/wroge/wgs84/v2 v2.0.0-alpha.20
+	github.com/yuin/goldmark/v2 v2.1.8
 	github.com/zc310/font v0.0.0-20261015234500-7f44c41494e0
 	golang.org/x/image v0.47.0
 	golang.org/x/text v0.43.0
@@ -72,6 +73,7 @@ require (
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/rymdport/portal v0.4.2 // indirect
 	github.com/srwiley/scanFT v0.0.0-20220128184157-0d1ee492111f // indirect
+	github.com/yuin/goldmark v1.8.6 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.8.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/exp v0.0.0-20251017212417-90e834f514db // indirect
@@ -88,7 +90,6 @@ require (
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c // indirect
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
 	github.com/stretchr/testify v1.12.1 // indirect
-	github.com/yuin/goldmark v1.8.6
 	golang.org/x/net v0.61.0
 	golang.org/x/sys v0.49.0 // indirect
 	star-tex.org/x/tex v0.7.1

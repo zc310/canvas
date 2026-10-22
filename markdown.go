@@ -6,9 +6,8 @@ import (
 	"io"
 	"math"
 
-	"github.com/yuin/goldmark"
-	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/renderer"
+	"github.com/yuin/goldmark/v2/ast"
+	"github.com/yuin/goldmark/v2/parser"
 )
 
 type mdRenderer struct {
@@ -23,33 +22,34 @@ type mdRenderer struct {
 }
 
 type mdState struct {
-	rect     Rect
-	font     *FontFamily
-	fontSize float64
+	rect      Rect
+	font      *FontFamily
+	fontSize  float64
+	fontStyle FontStyle
 }
 
 func (r *mdRenderer) renderInline(src []byte, n ast.Node, rt *RichText, s mdState) {
 	switch v := n.(type) {
 	case *ast.Text:
-		rt.Write(v.Value(src))
+		rt.SetFace(s.font.Face(s.fontSize, Black, s.fontStyle))
+		rt.WriteString(v.Value.Value(src))
 		if v.HardLineBreak() || v.SoftLineBreak() {
 			rt.WriteByte('\n')
 		}
-	case *ast.TextBlock:
-		rt.Write(v.Lines().Value(src))
 	case *ast.Emphasis:
-		switch v.Level {
-		case 1:
-			rt.SetFace(s.font.Face(s.fontSize, Black, FontItalic))
-		case 2:
-			rt.SetFace(s.font.Face(s.fontSize, Black, FontBold))
-		case 3:
-			rt.SetFace(s.font.Face(s.fontSize, Black, FontBold|FontItalic))
-		}
+		next := s
+		next.fontStyle |= FontItalic
 		for child := n.FirstChild(); child != nil; child = child.NextSibling() {
-			r.renderInline(src, child, rt, s)
+			r.renderInline(src, child, rt, next)
 		}
-		rt.SetFace(s.font.Face(s.fontSize, Black, FontRegular))
+		rt.SetFace(s.font.Face(s.fontSize, Black, s.fontStyle))
+	case *ast.Strong:
+		next := s
+		next.fontStyle |= FontBold
+		for child := n.FirstChild(); child != nil; child = child.NextSibling() {
+			r.renderInline(src, child, rt, next)
+		}
+		rt.SetFace(s.font.Face(s.fontSize, Black, s.fontStyle))
 	}
 }
 
@@ -104,7 +104,7 @@ func (r *mdRenderer) renderBlock(src []byte, n ast.Node, marginTop float64) (flo
 			if item, ok := child.(*ast.ListItem); ok {
 				_ = v.Marker
 				if v.Start != 0 {
-					_ = v.Start + item.Offset
+					_ = v.Start + item.Offset()
 				}
 
 				x := r.rect.X0 - r.faceDefault.Size*1.25
@@ -136,14 +136,17 @@ func (r *mdRenderer) renderBlock(src []byte, n ast.Node, marginTop float64) (flo
 				return 0.0, err
 			}
 		}
-	case *ast.Paragraph, *ast.Heading, *ast.TextBlock:
+	case *ast.Paragraph, *ast.Heading:
 		s := mdState{
 			rect:     r.rect,
 			font:     font,
 			fontSize: fontSize,
 		}
 		rt := NewRichText(font.Face(fontSize, Black, FontRegular))
-		for child := n.FirstChild(); child != nil && child.Type() == ast.TypeInline; child = child.NextSibling() {
+		for child := n.FirstChild(); child != nil; child = child.NextSibling() {
+			if _, ok := child.(ast.InlineNode); !ok {
+				break
+			}
 			r.renderInline(src, child, rt, s)
 		}
 
@@ -196,8 +199,6 @@ func (r *mdRenderer) Render(_ io.Writer, src []byte, n ast.Node) error {
 	return nil
 }
 
-func (r *mdRenderer) AddOptions(options ...renderer.Option) {}
-
 type MarkdownOptions struct {
 	Font          *FontFamily
 	FontSize      float64
@@ -224,7 +225,7 @@ func RenderMarkdown(ctx *Context, rect Rect, text string, opts *MarkdownOptions)
 	}
 
 	rect = rect.Transform(ctx.CoordSystemView())
-	renderer := &mdRenderer{
+	md := &mdRenderer{
 		c:             ctx.Renderer,
 		m:             ctx.CoordSystemView(),
 		rect:          rect,
@@ -232,8 +233,9 @@ func RenderMarkdown(ctx *Context, rect Rect, text string, opts *MarkdownOptions)
 		fontSize:      opts.FontSize,
 		thematicBreak: opts.ThematicBreak,
 	}
-	md := goldmark.New(goldmark.WithRenderer(renderer))
-	err := md.Convert([]byte(text), nil)
-	return rect.Y1 - renderer.rect.Y1, err
+	source := []byte(text)
+	root := parser.New().Parse(source)
+	err := md.Render(io.Discard, source, root)
+	return rect.Y1 - md.rect.Y1, err
 
 }
