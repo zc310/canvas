@@ -43,6 +43,7 @@ type SVG struct {
 	fonts         map[*canvas.Font]bool
 	fontSubset    map[*canvas.Font]*canvas.FontSubsetter
 	maskID        int
+	clipID        int
 	defs          map[any][2]string
 	classes       []string
 	customStyle   string
@@ -495,6 +496,32 @@ func (r *SVG) RenderImage(img image.Image, m canvas.Matrix) {
 	}
 	r.writeClasses(r.w)
 	fmt.Fprintf(r.w, `"/>`)
+}
+
+// RenderClippedImage embeds an image with a vector clip path in image-local coordinates.
+func (r *SVG) RenderClippedImage(img image.Image, m canvas.Matrix, clip *canvas.Path) {
+	if img == nil || clip == nil || clip.Empty() {
+		return
+	}
+	size := img.Bounds().Size()
+	writeTo, refMask, mimetype := r.encodableImage(img)
+	id := fmt.Sprintf("clip%d", r.clipID)
+	r.clipID++
+	fmt.Fprintf(r.w, `<defs><clipPath id="%s" clipPathUnits="userSpaceOnUse"><path d="%s"/></clipPath></defs>`, id, clip.ToSVG())
+	m = m.Translate(0, float64(size.Y))
+	fmt.Fprintf(r.w, `<g transform="%s" clip-path="url(#%s)"><image width="%d" height="%d" xlink:href="data:%s;base64,`, m.ToSVG(r.height), id, size.X, size.Y, mimetype)
+	encoder := base64.NewEncoder(base64.StdEncoding, r.w)
+	if err := writeTo(encoder); err != nil {
+		panic(err)
+	}
+	if err := encoder.Close(); err != nil {
+		panic(err)
+	}
+	if refMask != "" {
+		fmt.Fprintf(r.w, `" mask="url(#%s)`, refMask)
+	}
+	r.writeClasses(r.w)
+	fmt.Fprintf(r.w, `"/></g>`)
 }
 
 // return a WriterTo, a refMask and a mimetype

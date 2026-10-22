@@ -322,3 +322,19 @@ func (r *PDF) RenderText(text *canvas.Text, m canvas.Matrix) {
 func (r *PDF) RenderImage(img image.Image, m canvas.Matrix) {
 	r.w.DrawImage(img, r.opts.ImageEncoding, m)
 }
+
+// RenderClippedImage draws an image under a native PDF path clipping region.
+// clip uses image-local coordinates and is transformed with the image matrix.
+func (r *PDF) RenderClippedImage(img image.Image, m canvas.Matrix, clip *canvas.Path) {
+	if img == nil || clip == nil || clip.Empty() {
+		return
+	}
+	if r.w.inTextObject {
+		r.w.EndTextObject()
+	}
+	r.w.WriteString(" q ")
+	r.w.WriteString(clip.Copy().Transform(m).ToPDF())
+	r.w.WriteString(" W n ")
+	r.w.DrawImage(img, r.opts.ImageEncoding, m)
+	r.w.WriteString(" Q")
+}

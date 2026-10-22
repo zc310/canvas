@@ -21,6 +21,26 @@ import (
 	cimage "github.com/zc310/canvas/image"
 )
 
+func TestPDFClippedImageKeepsNativeClipAndOpaqueImage(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 20, 10))
+	for i := 3; i < len(img.Pix); i += 4 {
+		img.Pix[i] = 255
+	}
+	var output bytes.Buffer
+	r := New(&output, 30, 20, &Options{Compress: false})
+	r.RenderClippedImage(img, canvas.Identity.Translate(2, 3), canvas.Rectangle(8, 10).Translate(4, 0))
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data := output.Bytes()
+	if !bytes.Contains(data, []byte("W n")) {
+		t.Fatal("PDF stream is missing the native path clipping operator")
+	}
+	if bytes.Contains(data, []byte("/SMask")) {
+		t.Fatal("opaque clipped image should not require an SMask")
+	}
+}
+
 func TestPDF(t *testing.T) {
 	c := canvas.New(10, 10)
 	c.RenderPath(canvas.MustParseSVGPath("L10 0"), canvas.DefaultStyle, canvas.Identity)

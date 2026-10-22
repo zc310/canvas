@@ -2,12 +2,13 @@ package svg
 
 import (
 	"bytes"
+	"image"
 	"image/color"
 	"strings"
 	"testing"
 
-	"github.com/zc310/canvas"
 	"github.com/tdewolff/test"
+	"github.com/zc310/canvas"
 )
 
 func TestSVGText(t *testing.T) {
@@ -54,6 +55,19 @@ func TestSVGTextPreservesWhitespace(t *testing.T) {
 	}
 	if !strings.Contains(s, ">    indented  x<") {
 		t.Fatalf("SVG text did not keep leading/repeated spaces: %s", s)
+	}
+}
+
+func TestSVGClippedImageUsesClipPath(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 20, 10))
+	s := renderSVG(func(ctx *canvas.Context) {
+		ctx.RenderClippedImage(img, canvas.Identity.Translate(2, 3), canvas.Rectangle(8, 10).Translate(4, 0))
+	})
+	if !strings.Contains(s, `<clipPath`) || !strings.Contains(s, `clip-path="url(#clip0)"`) {
+		t.Fatalf("clipped image is missing an SVG clip path: %s", s)
+	}
+	if !strings.Contains(s, `<image width="20" height="10"`) {
+		t.Fatalf("clipped SVG should retain the source image: %s", s)
 	}
 }
 

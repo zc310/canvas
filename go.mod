@@ -1,6 +1,6 @@
 module github.com/zc310/canvas
 
-go 1.26
+go 1.26.0
 
 require (
 	fyne.io/fyne/v2 v2.8.2
@@ -25,7 +25,7 @@ require (
 	github.com/wcharczuk/go-chart/v2 v2.1.2
 	github.com/wroge/wgs84/v2 v2.0.0-alpha.20
 	github.com/yuin/goldmark/v2 v2.1.8
-	github.com/zc310/font v0.0.0-20261015234500-7f44c41494e0
+	github.com/zc310/font v0.0.0-20261022133848-ff1c0ce12ec1
 	golang.org/x/image v0.47.0
 	golang.org/x/text v0.43.0
 	gonum.org/v1/plot v0.17.0

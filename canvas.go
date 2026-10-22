@@ -210,6 +210,12 @@ type Renderer interface {
 	RenderImage(img image.Image, m Matrix)
 }
 
+// ClippedImageRenderer is an optional renderer extension for vector-preserving
+// image clipping. clip is expressed in source image pixel coordinates.
+type ClippedImageRenderer interface {
+	RenderClippedImage(img image.Image, m Matrix, clip *Path)
+}
+
 ////////////////////////////////////////////////////////////////
 
 // CoordSystem is the coordinate system, which can be either of the four cartesian quadrants. Most useful are the I'th and IV'th quadrants. CartesianI is the default quadrant with the zero-point in the bottom-left (the default for mathematics). The CartesianII has its zero-point in the bottom-right, CartesianIII in the top-right, and CartesianIV in the top-left (often used as default for printing devices). See https://en.wikipedia.org/wiki/Cartesian_coordinate_system#Quadrants_and_octants for an explanation.
@@ -701,6 +707,16 @@ func (c *Context) DrawImage(x, y float64, img image.Image, resolution Resolution
 	c.RenderImage(img, m)
 }
 
+// RenderClippedImage draws an image through a path in image-local coordinates.
+// Renderers may implement ClippedImageRenderer to preserve vector clipping.
+func (c *Context) RenderClippedImage(img image.Image, m Matrix, clip *Path) {
+	if renderer, ok := c.Renderer.(ClippedImageRenderer); ok {
+		renderer.RenderClippedImage(img, m, clip)
+		return
+	}
+	c.Renderer.RenderImage(clipImage(img, clip), m)
+}
+
 ////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////
@@ -711,6 +727,7 @@ type layer struct {
 	text  *Text
 	img   image.Image
 	scene *Canvas
+	clip  *Path // local clip for img; nil for ordinary layers
 
 	m     Matrix
 	style Style // only for path
@@ -767,6 +784,19 @@ func (c *Canvas) RenderImage(img image.Image, m Matrix) {
 	c.layers[c.zindex] = append(c.layers[c.zindex], layer{img: img, m: m})
 }
 
+// RenderClippedImage records an image and a path that clips it in image-local
+// coordinates. Renderers with native clipping can preserve the path; other
+// renderers replay a masked raster image.
+func (c *Canvas) RenderClippedImage(img image.Image, m Matrix, clip *Path) {
+	if img == nil || img.Bounds().Empty() || clip == nil || clip.Empty() {
+		return
+	}
+	if c.layers == nil {
+		c.layers = map[int][]layer{}
+	}
+	c.layers[c.zindex] = append(c.layers[c.zindex], layer{img: img, m: m, clip: clip.Copy()})
+}
+
 // RenderCanvas records a reusable canvas without copying its drawing operations.
 // scene must remain immutable after this call and must not refer to c, directly
 // or indirectly. Renderers may embed it once and reuse it, as with PDF Forms;
@@ -804,6 +834,9 @@ func (c *Canvas) MemorySize() int64 {
 				} else {
 					bounds := l.img.Bounds()
 					size += int64(bounds.Dx()) * int64(bounds.Dy()) * 4
+				}
+				if l.clip != nil {
+					size += int64(cap(l.clip.d)) * 8
 				}
 			} else if l.scene != nil {
 				size += l.scene.MemorySize()
@@ -913,7 +946,15 @@ func (c *Canvas) RenderViewTo(r Renderer, view Matrix) {
 			} else if l.text != nil {
 				r.RenderText(l.text, m)
 			} else if l.img != nil {
-				r.RenderImage(l.img, m)
+				if l.clip == nil {
+					r.RenderImage(l.img, m)
+				} else if clipped, ok := r.(interface {
+					RenderClippedImage(image.Image, Matrix, *Path)
+				}); ok {
+					clipped.RenderClippedImage(l.img, m, l.clip)
+				} else {
+					r.RenderImage(clipImage(l.img, l.clip), m)
+				}
 			} else if l.scene != nil {
 				if reusable, ok := r.(interface{ RenderCanvas(*Canvas, Matrix) }); ok {
 					reusable.RenderCanvas(l.scene, m)
