@@ -19,8 +19,8 @@ require (
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
 	github.com/srwiley/scanx v0.0.0-20190309010443-e94503791388
 	github.com/tdewolff/argp v0.0.0-20260913163208-9b59948ed567
-	github.com/tdewolff/minify/v2 v2.24.22
-	github.com/tdewolff/parse/v2 v2.8.19
+	github.com/tdewolff/minify/v2 v2.24.23
+	github.com/tdewolff/parse/v2 v2.8.20
 	github.com/tdewolff/test v1.0.12
 	github.com/wcharczuk/go-chart/v2 v2.1.2
 	github.com/wroge/wgs84/v2 v2.0.0-alpha.20
@@ -44,8 +44,8 @@ require (
 	github.com/BurntSushi/xgb v0.0.0-20210121224620-deaf085860bc // indirect
 	github.com/BurntSushi/xgbutil v0.0.0-20190907113008-ad855c713046 // indirect
 	github.com/ajstarks/svgo v0.0.0-20211024235047-1546f124cd8b // indirect
-	github.com/andybalholm/brotli v1.2.6 // indirect
-	github.com/anthonynsimon/bild v0.17.0 // indirect
+	github.com/andybalholm/brotli v1.2.7 // indirect
+	github.com/anthonynsimon/bild v0.17.1 // indirect
 	github.com/benoitkugler/textlayout v0.3.2 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
@@ -56,7 +56,7 @@ require (
 	github.com/go-gl/glfw/v3.4/glfw v0.1.0-pre.2 // indirect
 	github.com/go-sql-driver/mysql v1.9.3 // indirect
 	github.com/go-text/render v0.2.1 // indirect
-	github.com/godbus/dbus/v5 v5.2.2 // indirect
+	github.com/godbus/dbus/v5 v5.2.4 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/hack-pad/go-indexeddb v0.3.2 // indirect
 	github.com/hack-pad/safejs v0.1.1 // indirect
@@ -64,7 +64,7 @@ require (
 	github.com/jmoiron/sqlx v1.4.0 // indirect
 	github.com/jsummers/gobmp v0.0.0-20230614200233-a9de23ed2e25 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
-	github.com/mattn/go-runewidth v0.0.28 // indirect
+	github.com/mattn/go-runewidth v0.0.31 // indirect
 	github.com/mattn/go-sqlite3 v1.14.32 // indirect
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
 	github.com/nicksnyder/go-i18n/v2 v2.6.1 // indirect
@@ -74,10 +74,10 @@ require (
 	github.com/rymdport/portal v0.4.2 // indirect
 	github.com/srwiley/scanFT v0.0.0-20220128184157-0d1ee492111f // indirect
 	github.com/yuin/goldmark v1.8.6 // indirect
-	go.mongodb.org/mongo-driver/v2 v2.8.0 // indirect
+	go.mongodb.org/mongo-driver/v2 v2.9.2 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/exp v0.0.0-20251017212417-90e834f514db // indirect
-	golang.org/x/exp/shiny v0.0.0-20260820142414-ca536658362e // indirect
+	golang.org/x/exp/shiny v0.0.0-20261014143641-f0251eb4aa3e // indirect
 	golang.org/x/time v0.14.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
