@@ -646,17 +646,23 @@ func (c *Context) DrawPath(x, y float64, paths ...*Path) {
 		return
 	}
 
-	style := c.Style
 	m := c.CoordSystemView()
 
 	// get view
 	coord := c.coordView.Dot(Point{x, y})
 	m = m.Mul(c.view).Translate(coord.X, coord.Y)
 
-	dashes := style.Dashes
+	dashes := c.Style.Dashes
+	dashOffset, absoluteDashes := ScaleDash(c.Style.StrokeWidth, c.Style.DashOffset, dashes)
 	for _, path := range paths {
-		var ok bool
-		style.Dashes, ok = path.checkDash(c.Style.DashOffset, dashes)
+		style := c.Style
+		// checkDash compares against the path length, so it needs absolute
+		// lengths. Keep relative dashes for renderers that apply StrokeWidth.
+		checked, ok := path.checkDash(dashOffset, absoluteDashes)
+		style.Dashes = dashes
+		if len(checked) == 0 {
+			style.Dashes = nil
+		}
 		if !ok {
 			style.Stroke = Paint{}
 		}

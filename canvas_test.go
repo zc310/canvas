@@ -72,3 +72,57 @@ func TestCanvasFit(t *testing.T) {
 	test.Float(t, c.W, 20)
 	test.Float(t, c.H, 20)
 }
+
+func TestDrawPathChecksAbsoluteDashLengths(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		width  float64
+		offset float64
+		dashes []float64
+		length float64
+		stroke bool
+		dashed bool
+	}{
+		{"thin stroke keeps gaps", 0.002, 1000, []float64{3000, 1500}, 20, true, true},
+		{"wide dash covers path", 4, 0, []float64{1.5, .75}, 5, true, false},
+		{"wide gap covers path", 4, 1.75, []float64{1.5, .75}, 1, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := New(30, 10)
+			ctx := NewContext(c)
+			ctx.SetFillColor(Transparent)
+			ctx.SetStrokeColor(Black)
+			ctx.SetStrokeWidth(tc.width)
+			ctx.SetDashes(tc.offset, tc.dashes...)
+			path := &Path{}
+			path.MoveTo(0, 5)
+			path.LineTo(tc.length, 5)
+			ctx.DrawPath(0, 0, path)
+			style := c.layers[0][0].style
+			if style.HasStroke() != tc.stroke || style.IsDashed() != tc.dashed {
+				t.Fatalf("stroke=%v dashed=%v, want %v/%v", style.HasStroke(), style.IsDashed(), tc.stroke, tc.dashed)
+			}
+			if style.IsDashed() && style.Dashes[0] != tc.dashes[0] {
+				t.Fatal("recorded dash lengths must remain relative to stroke width")
+			}
+		})
+	}
+}
+
+func TestDrawPathDashGapDoesNotDisableFollowingPath(t *testing.T) {
+	c := New(30, 10)
+	ctx := NewContext(c)
+	ctx.SetFillColor(Transparent)
+	ctx.SetStrokeColor(Black)
+	ctx.SetStrokeWidth(4)
+	ctx.SetDashes(1.75, 1.5, .75)
+	short, long := &Path{}, &Path{}
+	short.MoveTo(0, 5)
+	short.LineTo(1, 5)
+	long.MoveTo(0, 5)
+	long.LineTo(20, 5)
+	ctx.DrawPath(0, 0, short, long)
+	if c.layers[0][0].style.HasStroke() || !c.layers[0][1].style.HasStroke() || !c.layers[0][1].style.IsDashed() {
+		t.Fatal("a path covered by the initial gap must not disable the next path's stroke")
+	}
+}
