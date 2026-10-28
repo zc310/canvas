@@ -71,6 +71,12 @@ Renderer adapters can use `pdf.PDF.RenderCanvasWith` to apply their own drawing
 logic while building the Form. The callback runs synchronously on the first
 occurrence only; subsequent references use the recorded PDF content.
 
+The PDF renderer supports page destinations with `AddOutlineToPage` and external
+links with `AddOutlineURI(title, level, uri)`. Both forms share the same outline
+tree and may be nested together. URI entries do not require a target page; empty
+URIs are ignored. Titles retain Unicode text and URI strings are escaped by the
+PDF serializer.
+
 ### Stable path boolean operations
 Numerically stable (!) path boolean operations, supporting AND, OR, XOR, NOT, and DIV operations in `O((n+k) log n)`, with `n` the number of segments and `k` the number of intersections. This is very fast and allows handling huge paths. It uses 64-bit floating-point precision for highly accurate computation and employs an additional strategy to ensure numerical stability. In particular:
 - Allows paths, subject or clipping, with any number of (overlapping) contours.

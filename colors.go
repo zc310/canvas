@@ -112,12 +112,12 @@ func (g *Grad) Add(t float64, color color.RGBA) {
 
 // At returns the color at position t ∈ [0,1].
 func (g Grad) At(t float64) color.RGBA {
-	if len(g) == 0 {
+	if len(g) == 0 || math.IsNaN(t) {
 		return Transparent
 	} else if len(g) == 1 || t <= g[0].Offset {
-		return g[0].Color
+		return sampledStopColor(g[0].Color)
 	} else if g[len(g)-1].Offset <= t {
-		return g[len(g)-1].Color
+		return sampledStopColor(g[len(g)-1].Color)
 	}
 	for i, after := range g[1:] {
 		if t < after.Offset {
@@ -126,7 +126,16 @@ func (g Grad) At(t float64) color.RGBA {
 			return colorLerp(before.Color, after.Color, t)
 		}
 	}
-	return g[len(g)-1].Color
+	return sampledStopColor(g[len(g)-1].Color)
+}
+
+// A transparent stop may carry straight RGB for interpolation. Never expose
+// that carrier as a sampled premultiplied pixel.
+func sampledStopColor(c color.RGBA) color.RGBA {
+	if c.A == 0 {
+		return Transparent
+	}
+	return c
 }
 
 func (g Grad) ToLinear(start, end Point) *LinearGradient {
@@ -152,6 +161,26 @@ func (g Grad) SetColorSpace(colorSpace ColorSpace) {
 }
 
 func colorLerp(c0, c1 color.RGBA, t float64) color.RGBA {
+	// OFD adapters may retain straight RGB in a fully transparent stop. Such
+	// carriers require straight interpolation followed by premultiplication;
+	// adding their raw channels would produce RGB greater than Alpha.
+	if (c0.A == 0 && (c0.R != 0 || c0.G != 0 || c0.B != 0)) || (c1.A == 0 && (c1.R != 0 || c1.G != 0 || c1.B != 0)) {
+		straight := func(c color.RGBA) color.NRGBA {
+			if c.A == 0 {
+				return color.NRGBA{R: c.R, G: c.G, B: c.B}
+			}
+			return color.NRGBAModel.Convert(c).(color.NRGBA)
+		}
+		a, b := straight(c0), straight(c1)
+		weight := uint32(t*65535.0 + .5)
+		mixed := color.NRGBA{
+			R: lerp(uint32(a.R)*0x101, uint32(b.R)*0x101, weight),
+			G: lerp(uint32(a.G)*0x101, uint32(b.G)*0x101, weight),
+			B: lerp(uint32(a.B)*0x101, uint32(b.B)*0x101, weight),
+			A: lerp(uint32(a.A)*0x101, uint32(b.A)*0x101, weight),
+		}
+		return color.RGBAModel.Convert(mixed).(color.RGBA)
+	}
 	r0, g0, b0, a0 := c0.RGBA()
 	r1, g1, b1, a1 := c1.RGBA()
 	T := uint32(t*65535.0 + 0.5)
@@ -170,6 +199,7 @@ func lerp(a, b, t uint32) uint8 {
 // LinearGradient is a linear gradient pattern between the given start and end points. The color at offset 0 corresponds to the start position, and offset 1 to the end position. Start and end points are in the canvas's coordinate system.
 type LinearGradient struct {
 	Grad
+
 	Start, End Point
 	// Extend controls whether the gradient is painted before the start point
 	// (Extend[0]) and after the end point (Extend[1]). When false the region
@@ -233,6 +263,7 @@ func (g *LinearGradient) At(x, y float64) color.RGBA {
 // RadialGradient is a radial gradient pattern between two circles defined by their center points and radii. Color stop at offset 0 corresponds to the first circle and offset 1 to the second circle.
 type RadialGradient struct {
 	Grad
+
 	C0, C1 Point
 	R0, R1 float64
 	// Extend controls whether the gradient is painted before the first circle

@@ -11,9 +11,10 @@ import (
 )
 
 type Options struct {
+	cimage.ImageEncoding
+
 	Compress    bool
 	SubsetFonts bool
-	cimage.ImageEncoding
 }
 
 var DefaultOptions = Options{
@@ -149,6 +150,17 @@ func (r *PDF) AddOutlineToPage(page int, pageHeight float64, name string, level 
 		next:   -1,
 		first:  -1,
 		last:   -1,
+	})
+}
+
+// AddOutlineURI adds an outline entry that opens uri rather than a page destination.
+// Entries share the same tree and levels as AddOutlineToPage. An empty URI is ignored.
+func (r *PDF) AddOutlineURI(name string, level int, uri string) {
+	if uri == "" {
+		return
+	}
+	r.w.pdf.outlines = append(r.w.pdf.outlines, pdfOutline{
+		page: -1, name: name, level: level, uri: uri, parent: -1, prev: -1, next: -1, first: -1, last: -1,
 	})
 }
 

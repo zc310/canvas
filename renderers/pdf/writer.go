@@ -96,6 +96,7 @@ type pdfOutline struct {
 	name  string
 	level int
 	y     float64
+	uri   string
 
 	// dest is set by AddOutlineToPage and takes precedence over y. y stays for
 	// the AddOutline form, which infers Fit or FitH from whether y is zero.
@@ -789,7 +790,7 @@ func (w *pdfWriter) validOutlines() []pdfOutline {
 			}
 			skipDepth = -1
 		}
-		if entry.page < 0 || len(w.pages) <= entry.page {
+		if entry.uri == "" && (entry.page < 0 || len(w.pages) <= entry.page) {
 			skipDepth = entry.level
 			continue
 		}
@@ -874,7 +875,9 @@ func (w *pdfWriter) writeOutlines() (pdfRef, bool) {
 			"Title": pdfTextString(w.outlines[i].name),
 		}
 		entry := &w.outlines[i]
-		if entry.dest != nil {
+		if entry.uri != "" {
+			outline["A"] = pdfDict{"S": pdfName("URI"), "URI": entry.uri}
+		} else if entry.dest != nil {
 			outline["Dest"] = entry.dest.destArray(w.pages[entry.page], entry.pageSize)
 		} else if entry.y == 0.0 {
 			outline["Dest"] = pdfArray{w.pages[entry.page], pdfName("Fit")}
@@ -1047,6 +1050,7 @@ func (w *pdfWriter) Close() error {
 
 type pdfPageWriter struct {
 	*bytes.Buffer
+
 	pdf           *pdfWriter
 	width, height float64
 	resources     pdfDict

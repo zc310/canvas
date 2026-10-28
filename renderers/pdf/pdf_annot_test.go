@@ -370,6 +370,37 @@ func TestAddOutlineToPageWritesExplicitDests(t *testing.T) {
 	}
 }
 
+func TestAddOutlineURIKeepsActionsAndMixedTree(t *testing.T) {
+	out := buildAnnotatedPDF(t, 2, func(doc *PDF, index int) {
+		if index != 0 {
+			return
+		}
+		doc.AddOutlineURI("external", 0, `https://example.com/a(b)\c`)
+		doc.AddOutlineToPage(1, 297, "internal-child", 1, Dest{Kind: DestXYZ, X: 0, Y: 20, Zoom: 2})
+		doc.AddOutlineURI("外部链接", 0, "https://example.com/second")
+		doc.AddOutlineURI("empty", 0, "")
+	})
+	var externalRef, child string
+	for _, object := range regexp.MustCompile(`(?s)(\d+) 0 obj\s*(.*?)\s*endobj`).FindAllStringSubmatch(out, -1) {
+		body := object[2]
+		if strings.Contains(body, "/Title(external)") {
+			externalRef = object[1] + " 0 R"
+			if !strings.Contains(body, "/S/URI") || !strings.Contains(body, `https://example.com/a\(b\)\\c`) || strings.Contains(body, "/Dest") {
+				t.Fatalf("URI动作编码错误：%s", body)
+			}
+		}
+		if strings.Contains(body, "/Title(internal-child)") {
+			child = body
+		}
+	}
+	if externalRef == "" || !strings.Contains(child, "/Parent "+externalRef) || !strings.Contains(child, "/XYZ") {
+		t.Fatalf("URI与内部跳转混排破坏树：%s", out)
+	}
+	if strings.Contains(out, "/Title(empty)") || !strings.Contains(out, pdfTextString("外部链接")) {
+		t.Fatal("空URI或中文标题处理错误")
+	}
+}
+
 // TestAddOutlineToPageBuildsTree 验证层级被正确还原成大纲树。
 func TestAddOutlineToPageBuildsTree(t *testing.T) {
 	out := buildAnnotatedPDF(t, 2, func(doc *PDF, index int) {

@@ -127,6 +127,27 @@ func TestGradAdd(t *testing.T) {
 	}
 }
 
+func TestGradTransparentCarrierIsNotReturnedAsPremultipliedPixel(t *testing.T) {
+	g := Grad{{Offset: 0, Color: color.RGBA{R: 255}}, {Offset: 1, Color: color.RGBA{B: 255, A: 255}}}
+	for _, position := range []float64{-1, 0, math.NaN()} {
+		if got := g.At(position); got != Transparent {
+			t.Fatalf("transparent endpoint at %g leaked color: %v", position, got)
+		}
+	}
+	if got := g.At(.5); got != (color.RGBA{R: 63, B: 63, A: 127}) {
+		t.Fatalf("carrier midpoint: %v", got)
+	}
+	for _, position := range []float64{.1, .25, .5, .75, .9} {
+		c := g.At(position)
+		if c.R > c.A || c.G > c.A || c.B > c.A {
+			t.Fatalf("invalid premultiplied pixel at %g: %v", position, c)
+		}
+	}
+	if g[0].Color.R != 255 {
+		t.Fatal("sampling mutated the stop carrier")
+	}
+}
+
 func TestRadialGradientAt(t *testing.T) {
 	red := color.RGBA{255, 0, 0, 255}
 	blue := color.RGBA{0, 0, 255, 255}
