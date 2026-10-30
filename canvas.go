@@ -211,9 +211,17 @@ type Renderer interface {
 }
 
 // ClippedImageRenderer is an optional renderer extension for vector-preserving
-// image clipping. clip is expressed in source image pixel coordinates.
+// image clipping. clip is expressed in source image pixel coordinates and uses
+// the NonZero fill rule; settle EvenOdd paths with Path.Settle(EvenOdd) first.
 type ClippedImageRenderer interface {
 	RenderClippedImage(img image.Image, m Matrix, clip *Path)
+}
+
+// ClippedTextRenderer preserves text and its text-local clipping path without
+// converting glyphs into intersected outlines before rendering. Clips use the
+// NonZero fill rule; settle an EvenOdd path with Path.Settle(EvenOdd) first.
+type ClippedTextRenderer interface {
+	RenderClippedText(text *Text, m Matrix, clip *Path)
 }
 
 ////////////////////////////////////////////////////////////////
@@ -713,6 +721,23 @@ func (c *Context) DrawImage(x, y float64, img image.Image, resolution Resolution
 	c.RenderImage(img, m)
 }
 
+// RenderClippedText forwards native text clipping or renders clipped outlines
+// when the underlying renderer does not support it. m is already a render
+// transform and does not include this Context's drawing state.
+func (c *Context) RenderClippedText(text *Text, m Matrix, clip *Path) {
+	if text == nil || text.Empty() || clip == nil || clip.Empty() {
+		return
+	}
+
+	if renderer, ok := c.Renderer.(ClippedTextRenderer); ok {
+		renderer.RenderClippedText(text, m, clip)
+
+		return
+	}
+
+	renderClippedText(c.Renderer, text, m, clip)
+}
+
 // RenderClippedImage draws an image through a path in image-local coordinates.
 // Renderers may implement ClippedImageRenderer to preserve vector clipping.
 func (c *Context) RenderClippedImage(img image.Image, m Matrix, clip *Path) {
@@ -733,7 +758,7 @@ type layer struct {
 	text  *Text
 	img   image.Image
 	scene *Canvas
-	clip  *Path // local clip for img; nil for ordinary layers
+	clip  *Path // local clip for img or text; nil for ordinary layers
 
 	m     Matrix
 	style Style // only for path
@@ -782,6 +807,22 @@ func (c *Canvas) RenderText(text *Text, m Matrix) {
 	c.layers[c.zindex] = append(c.layers[c.zindex], layer{text: text, m: m})
 }
 
+// RenderClippedText records immutable text and a copy of its text-local clipping
+// path for replay by renderers with native clipping or an outline fallback.
+func (c *Canvas) RenderClippedText(text *Text, matrix Matrix, clip *Path) {
+	if text == nil || text.Empty() || clip == nil || clip.Empty() {
+		return
+	}
+
+	if c.layers == nil {
+		c.layers = map[int][]layer{}
+	}
+
+	c.layers[c.zindex] = append(c.layers[c.zindex], layer{
+		path: nil, text: text, img: nil, scene: nil, clip: clip.Copy(), m: matrix, style: DefaultStyle,
+	})
+}
+
 // RenderImage renders an image to the canvas using a transformation matrix.
 func (c *Canvas) RenderImage(img image.Image, m Matrix) {
 	if c.layers == nil {
@@ -821,12 +862,14 @@ func (c *Canvas) RenderCanvas(scene *Canvas, m Matrix) {
 // shared font programs. Reusable canvases and images may be counted more than
 // once; the conservative estimate is intended for bounded rendering caches.
 func (c *Canvas) MemorySize() int64 {
+	const coordinateBytes = 8
+
 	var size int64 = 128
 	for _, layers := range c.layers {
 		size += int64(cap(layers)) * 256
 		for _, l := range layers {
 			if l.path != nil {
-				size += int64(cap(l.path.d)) * 8
+				size += int64(cap(l.path.d)) * coordinateBytes
 			} else if l.text != nil {
 				l.text.WalkSpans(func(_, _ float64, span TextSpan) {
 					size += 256 + int64(len(span.Text)) + int64(len(span.Glyphs))*64
@@ -834,6 +877,10 @@ func (c *Canvas) MemorySize() int64 {
 						size += object.Canvas.MemorySize()
 					}
 				})
+
+				if l.clip != nil {
+					size += int64(cap(l.clip.d)) * coordinateBytes
+				}
 			} else if l.img != nil {
 				if weighted, ok := l.img.(interface{ Weight() int64 }); ok {
 					size += weighted.Weight()
@@ -842,7 +889,7 @@ func (c *Canvas) MemorySize() int64 {
 					size += int64(bounds.Dx()) * int64(bounds.Dy()) * 4
 				}
 				if l.clip != nil {
-					size += int64(cap(l.clip.d)) * 8
+					size += int64(cap(l.clip.d)) * coordinateBytes
 				}
 			} else if l.scene != nil {
 				size += l.scene.MemorySize()
@@ -950,13 +997,17 @@ func (c *Canvas) RenderViewTo(r Renderer, view Matrix) {
 			if l.path != nil {
 				r.RenderPath(l.path, l.style, m)
 			} else if l.text != nil {
-				r.RenderText(l.text, m)
+				if l.clip == nil {
+					r.RenderText(l.text, m)
+				} else if clipped, ok := r.(ClippedTextRenderer); ok {
+					clipped.RenderClippedText(l.text, m, l.clip)
+				} else {
+					renderClippedText(r, l.text, m, l.clip)
+				}
 			} else if l.img != nil {
 				if l.clip == nil {
 					r.RenderImage(l.img, m)
-				} else if clipped, ok := r.(interface {
-					RenderClippedImage(image.Image, Matrix, *Path)
-				}); ok {
+				} else if clipped, ok := r.(ClippedImageRenderer); ok {
 					clipped.RenderClippedImage(l.img, m, l.clip)
 				} else {
 					r.RenderImage(clipImage(l.img, l.clip), m)

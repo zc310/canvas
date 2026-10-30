@@ -71,6 +71,62 @@ func TestSVGClippedImageUsesClipPath(t *testing.T) {
 	}
 }
 
+func TestClippedTextRetainsNativeTextAndPageCoordinateClip(t *testing.T) {
+	t.Parallel()
+
+	family := canvas.NewFontFamily("clip-test")
+
+	err := family.LoadFontFile("../../resources/DejaVuSerif.ttf", canvas.FontRegular)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	line := canvas.NewTextLine(family.Face(12, canvas.Black), "Hello", canvas.Left)
+	clip := canvas.Rectangle(5, 4)
+	matrix := canvas.Identity.Translate(2, 8).Rotate(15)
+	output := renderSVG(func(ctx *canvas.Context) {
+		renderer, ok := ctx.Renderer.(canvas.ClippedTextRenderer)
+		if !ok {
+			t.Fatal("canvas recorder does not support clipped text")
+		}
+
+		renderer.RenderClippedText(line, matrix, clip)
+	})
+	path := clip.Copy().Transform(canvas.Identity.Translate(0, 100).ReflectY().Mul(matrix)).ToSVG()
+
+	for _, fragment := range []string{`<path d="` + path + `"`, `<text`, `clip-path="url(#clip0)"`, `Hello`} {
+		if !strings.Contains(output, fragment) {
+			t.Fatalf("native SVG clipped text is missing %q", fragment)
+		}
+	}
+
+	if !clip.Equals(canvas.Rectangle(5, 4)) {
+		t.Fatal("SVG serialization modified the shared clipping path")
+	}
+}
+
+func TestClippedTextAcceptsNormalizedEvenOddClip(t *testing.T) {
+	t.Parallel()
+
+	family := canvas.NewFontFamily("clip-hole")
+	err := family.LoadFontFile("../../resources/DejaVuSerif.ttf", canvas.FontRegular)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := canvas.NewTextLine(family.Face(12, canvas.Black), "Hello", canvas.Left)
+	clip := canvas.Rectangle(20, 20).Append(canvas.Rectangle(5, 5).Translate(5, 5)).Settle(canvas.EvenOdd)
+	if clip.ContainsPoint(7, 7, canvas.NonZero) || !clip.ContainsPoint(2, 2, canvas.NonZero) {
+		t.Fatal("normalization did not preserve the EvenOdd hole")
+	}
+	output := renderSVG(func(ctx *canvas.Context) {
+		ctx.RenderClippedText(line, canvas.Identity, clip)
+	})
+	path := clip.Copy().Transform(canvas.Identity.Translate(0, 100).ReflectY()).ToSVG()
+	if !strings.Contains(output, `<path d="`+path+`"`) || !strings.Contains(output, `<text`) {
+		t.Fatal("SVG did not preserve the normalized clipping contours and native text")
+	}
+}
+
 // renderSVG draws onto a 100x100 canvas and returns the SVG output without the <svg> header.
 func renderSVG(draw func(*canvas.Context)) string {
 	c := canvas.New(100.0, 100.0)

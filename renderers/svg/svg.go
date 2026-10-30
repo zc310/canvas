@@ -498,6 +498,33 @@ func (r *SVG) RenderImage(img image.Image, m canvas.Matrix) {
 	fmt.Fprintf(r.w, `"/>`)
 }
 
+// RenderClippedText draws native text under a clipPath in SVG page coordinates.
+func (r *SVG) RenderClippedText(text *canvas.Text, m canvas.Matrix, clip *canvas.Path) {
+	r.RenderClippedTextWith(text, m, clip, func() { r.RenderText(text, m) })
+}
+
+// RenderClippedTextWith applies a text-local clip around a custom text drawing
+// callback, allowing callers to retain gradient outline adapters.
+func (r *SVG) RenderClippedTextWith(text *canvas.Text, matrix canvas.Matrix, clip *canvas.Path, draw func()) {
+	if text == nil || text.Empty() || clip == nil || clip.Empty() {
+		return
+	}
+
+	clipID := fmt.Sprintf("clip%d", r.clipID)
+	r.clipID++
+	flip := canvas.Identity.Translate(0, r.height).ReflectY()
+	path := clip.Copy().Transform(flip.Mul(matrix))
+
+	const clipGroup = `<defs><clipPath id="%s" clipPathUnits="userSpaceOnUse">` +
+		`<path d="%s"/></clipPath></defs><g clip-path="url(#%s)">`
+
+	_, _ = fmt.Fprintf(r.w, clipGroup, clipID, path.ToSVG(), clipID)
+
+	draw()
+
+	_, _ = fmt.Fprint(r.w, `</g>`)
+}
+
 // RenderClippedImage embeds an image with a vector clip path in image-local coordinates.
 func (r *SVG) RenderClippedImage(img image.Image, m canvas.Matrix, clip *canvas.Path) {
 	if img == nil || clip == nil || clip.Empty() {

@@ -41,6 +41,48 @@ func TestPDFClippedImageKeepsNativeClipAndOpaqueImage(t *testing.T) {
 	}
 }
 
+func TestClippedTextPreservesFontReferencesAndRestoresGraphicsCache(t *testing.T) {
+	t.Parallel()
+
+	family := canvas.NewFontFamily("clip-test")
+
+	err := family.LoadFontFile("../../resources/DejaVuSerif.ttf", canvas.FontRegular)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	line := canvas.NewTextLine(family.Face(12, color.RGBA{R: 128, G: 0, B: 0, A: 128}), "Hello", canvas.Left)
+
+	var output bytes.Buffer
+
+	renderer := New(&output, 30, 20, &Options{SubsetFonts: true, Compress: false, ImageEncoding: cimage.Lossless})
+	before := *renderer.w
+	renderer.RenderClippedText(line, canvas.Identity.Translate(2, 8), canvas.Rectangle(5, 5))
+
+	if renderer.w.alpha != before.alpha || renderer.w.fill != before.fill {
+		t.Fatal("graphics paint cache was not restored after Q")
+	}
+
+	if renderer.w.font != before.font || renderer.w.fontSize != before.fontSize || renderer.w.inTextObject {
+		t.Fatal("text graphics cache was not restored after Q")
+	}
+
+	for _, operator := range []string{" W n ", " BT", " Tf"} {
+		if !bytes.Contains(renderer.w.Bytes(), []byte(operator)) {
+			t.Fatalf("native clipped text is missing operator %q", operator)
+		}
+	}
+
+	style := canvas.DefaultStyle
+	style.Fill = canvas.Paint{Color: canvas.Red, Gradient: nil, Pattern: nil}
+	renderer.RenderPath(canvas.Rectangle(2, 2), style, canvas.Identity.Translate(20, 2))
+
+	err = renderer.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPDF(t *testing.T) {
 	c := canvas.New(10, 10)
 	c.RenderPath(canvas.MustParseSVGPath("L10 0"), canvas.DefaultStyle, canvas.Identity)

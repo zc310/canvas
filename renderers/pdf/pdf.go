@@ -330,6 +330,28 @@ func (r *PDF) RenderText(text *canvas.Text, m canvas.Matrix) {
 	})
 }
 
+// RenderClippedText draws text under a native PDF clip, preserving font and glyph
+// reuse instead of writing intersected glyph outlines.
+func (r *PDF) RenderClippedText(text *canvas.Text, m canvas.Matrix, clip *canvas.Path) {
+	r.RenderClippedTextWith(text, m, clip, func() { r.RenderText(text, m) })
+}
+
+// RenderClippedTextWith applies a native text-local clip around a custom text
+// drawing callback, such as a renderer's gradient or synthetic weight adapter.
+func (r *PDF) RenderClippedTextWith(text *canvas.Text, matrix canvas.Matrix, clip *canvas.Path, draw func()) {
+	if text == nil || text.Empty() || clip == nil || clip.Empty() {
+		return
+	}
+
+	state := r.w.pushState()
+	defer r.w.popState(state)
+	_, _ = r.w.WriteString(" ")
+	_, _ = r.w.WriteString(clip.Copy().Transform(matrix).ToPDF())
+	_, _ = r.w.WriteString(" W n ")
+
+	draw()
+}
+
 // RenderImage renders an image to the canvas using a transformation matrix.
 func (r *PDF) RenderImage(img image.Image, m canvas.Matrix) {
 	r.w.DrawImage(img, r.opts.ImageEncoding, m)
@@ -341,12 +363,10 @@ func (r *PDF) RenderClippedImage(img image.Image, m canvas.Matrix, clip *canvas.
 	if img == nil || clip == nil || clip.Empty() {
 		return
 	}
-	if r.w.inTextObject {
-		r.w.EndTextObject()
-	}
-	r.w.WriteString(" q ")
+	state := r.w.pushState()
+	defer r.w.popState(state)
+	_, _ = r.w.WriteString(" ")
 	r.w.WriteString(clip.Copy().Transform(m).ToPDF())
 	r.w.WriteString(" W n ")
 	r.w.DrawImage(img, r.opts.ImageEncoding, m)
-	r.w.WriteString(" Q")
 }

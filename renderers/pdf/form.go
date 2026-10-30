@@ -69,9 +69,8 @@ func (r *PDF) RenderCanvasWith(scene *canvas.Canvas, m canvas.Matrix, draw func(
 	}
 	name := pdfName(fmt.Sprintf("Fm%d", ref))
 	r.w.resources["XObject"].(pdfDict)[name] = ref
-	if r.w.inTextObject {
-		r.w.EndTextObject()
-	}
 	// q/Q isolates the Form from both preceding and subsequent page content.
-	fmt.Fprintf(r.w, " q %v %v %v %v %v %v cm /%s Do Q", dec(m[0][0]), dec(m[1][0]), dec(m[0][1]), dec(m[1][1]), dec(m[0][2]), dec(m[1][2]), name)
+	state := r.w.pushState()
+	defer r.w.popState(state)
+	_, _ = fmt.Fprintf(r.w, " %v %v %v %v %v %v cm /%s Do", dec(m[0][0]), dec(m[1][0]), dec(m[0][1]), dec(m[1][1]), dec(m[0][2]), dec(m[1][2]), name)
 }

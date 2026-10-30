@@ -1050,6 +1050,7 @@ func (w *pdfWriter) Close() error {
 
 type pdfPageWriter struct {
 	*bytes.Buffer
+	pdfGraphicsState
 
 	pdf           *pdfWriter
 	width, height float64
@@ -1058,6 +1059,11 @@ type pdfPageWriter struct {
 	annots        pdfArray
 
 	graphicsStates map[float64]pdfName
+}
+
+// pdfGraphicsState groups every cached drawing setting restored by q/Q.
+// Resources and output belong to the content writer and survive a pop.
+type pdfGraphicsState struct {
 	alpha          float64
 	fill           canvas.Paint
 	stroke         canvas.Paint
@@ -1073,6 +1079,26 @@ type pdfPageWriter struct {
 	textPosition   canvas.Matrix
 	textCharSpace  float64
 	textRenderMode int
+}
+
+// pushState closes any text object so q/Q scopes never cross a BT/ET pair.
+func (w *pdfPageWriter) pushState() pdfGraphicsState {
+	if w.inTextObject {
+		w.EndTextObject()
+	}
+	state := w.pdfGraphicsState
+	// Keep dash storage independent of any updates made inside the scope.
+	state.dashes = append([]float64(nil), state.dashes...)
+	_, _ = w.WriteString(" q")
+	return state
+}
+
+func (w *pdfPageWriter) popState(state pdfGraphicsState) {
+	if w.inTextObject {
+		w.EndTextObject()
+	}
+	_, _ = w.WriteString(" Q")
+	w.pdfGraphicsState = state
 }
 
 // NewPage starts a new page.
@@ -1100,21 +1126,23 @@ func (w *pdfWriter) newContentWriter(width, height float64) *pdfPageWriter {
 		resources:      pdfDict{},
 		patterns:       map[pdfPatternKey]pdfName{},
 		graphicsStates: map[float64]pdfName{},
-		alpha:          1.0,
-		fill:           canvas.Paint{Color: canvas.Black},
-		stroke:         canvas.Paint{Color: canvas.Black},
-		lineWidth:      1.0,
-		lineCap:        0,
-		lineJoin:       0,
-		miterLimit:     10.0,
-		dashes:         []float64{0.0}, // dashArray and dashPhase
-		font:           nil,
-		fontSize:       0.0,
-		fontDirection:  ctext.LeftToRight,
-		inTextObject:   false,
-		textPosition:   canvas.Identity,
-		textCharSpace:  0.0,
-		textRenderMode: 0,
+		pdfGraphicsState: pdfGraphicsState{
+			alpha:          1.0,
+			fill:           canvas.Paint{Color: canvas.Black},
+			stroke:         canvas.Paint{Color: canvas.Black},
+			lineWidth:      1.0,
+			lineCap:        0,
+			lineJoin:       0,
+			miterLimit:     10.0,
+			dashes:         []float64{0.0}, // dashArray and dashPhase
+			font:           nil,
+			fontSize:       0.0,
+			fontDirection:  ctext.LeftToRight,
+			inTextObject:   false,
+			textPosition:   canvas.Identity,
+			textCharSpace:  0.0,
+			textRenderMode: 0,
+		},
 	}
 }
 
@@ -1579,6 +1607,8 @@ func (w *pdfPageWriter) WriteText(mode canvas.WritingMode, TJ ...interface{}) {
 // DrawImage embeds and draws an image.
 func (w *pdfPageWriter) DrawImage(img image.Image, enc cimage.ImageEncoding, m canvas.Matrix) {
 	size := img.Bounds().Size()
+	state := w.pushState()
+	defer w.popState(state)
 
 	// add clipping path around image for smooth edges when rotating
 	outerRect := canvas.Rect{0.0, 0.0, float64(size.X), float64(size.Y)}.Transform(m)
@@ -1586,7 +1616,7 @@ func (w *pdfPageWriter) DrawImage(img image.Image, enc cimage.ImageEncoding, m c
 	br := m.Dot(canvas.Point{float64(size.X), 0})
 	tl := m.Dot(canvas.Point{0, float64(size.Y)})
 	tr := m.Dot(canvas.Point{float64(size.X), float64(size.Y)})
-	fmt.Fprintf(w, " q %v %v %v %v re W n", dec(outerRect.X0), dec(outerRect.Y0), dec(outerRect.W()), dec(outerRect.H()))
+	_, _ = fmt.Fprintf(w, " %v %v %v %v re W n", dec(outerRect.X0), dec(outerRect.Y0), dec(outerRect.W()), dec(outerRect.H()))
 	fmt.Fprintf(w, " %v %v m %v %v l %v %v l %v %v l h W n", dec(bl.X), dec(bl.Y), dec(tl.X), dec(tl.Y), dec(tr.X), dec(tr.Y), dec(br.X), dec(br.Y))
 
 	ref := w.embedImage(img, enc)
@@ -1598,7 +1628,7 @@ func (w *pdfPageWriter) DrawImage(img image.Image, enc cimage.ImageEncoding, m c
 
 	m = m.Scale(float64(size.X), float64(size.Y))
 	w.SetAlpha(1.0)
-	fmt.Fprintf(w, " %v %v %v %v %v %v cm /%v Do Q", dec(m[0][0]), dec(m[1][0]), dec(m[0][1]), dec(m[1][1]), dec(m[0][2]), dec(m[1][2]), name)
+	_, _ = fmt.Fprintf(w, " %v %v %v %v %v %v cm /%v Do", dec(m[0][0]), dec(m[1][0]), dec(m[0][1]), dec(m[1][1]), dec(m[0][2]), dec(m[1][2]), name)
 }
 
 func (w *pdfPageWriter) embedImage(img image.Image, enc cimage.ImageEncoding) pdfRef {
