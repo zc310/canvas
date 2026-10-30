@@ -10,44 +10,27 @@ func renderClippedText(renderer Renderer, text *Text, matrix Matrix, clip *Path)
 	}
 
 	clip = clip.Copy().Transform(matrix)
+
+	var resolution Resolution
+	if raster, ok := renderer.(interface{ Resolution() Resolution }); ok {
+		resolution = raster.Resolution()
+	}
 	text.RenderTo(clippedTextPaths{
-		Renderer: renderer, clip: clip, bounds: clip.Bounds(), rectangle: clippedTextRectangle(clip),
-	}, matrix, 0)
+		Renderer: renderer, clip: clip, bounds: clip.Bounds(), rectangle: clip.IsAxisAlignedRect(), resolution: resolution,
+	}, matrix, resolution)
 }
 
 type clippedTextPaths struct {
 	Renderer
 
-	clip      *Path
-	bounds    Rect
-	rectangle bool
+	clip       *Path
+	bounds     Rect
+	rectangle  bool
+	resolution Resolution
 }
 
-// Only an exact, single axis-aligned rectangle allows a bounds containment
-// shortcut. A concave path or a path with holes can have the same bounding box.
-func clippedTextRectangle(path *Path) bool {
-	if len(path.d) != 20 || path.d[0] != MoveToCmd || path.d[16] != CloseCmd {
-		return false
-	}
-
-	for i := 4; i < 16; i += 4 {
-		if path.d[i] != LineToCmd {
-			return false
-		}
-	}
-
-	for i := 0; i < 16; i += 4 {
-		j := (i + 4) % 16
-		k := (i + 8) % 16
-		vertical := path.d[i+1] == path.d[j+1]
-		horizontal := path.d[i+2] == path.d[j+2]
-
-		if vertical == horizontal || vertical == (path.d[j+1] == path.d[k+1]) {
-			return false
-		}
-	}
-
-	return true
+func (r clippedTextPaths) Resolution() Resolution {
+	return r.resolution
 }
 
 func closedTextFill(path *Path, rule FillRule) *Path {
@@ -93,7 +76,7 @@ func (r clippedTextPaths) RenderPath(path *Path, style Style, matrix Matrix) {
 }
 
 func (r clippedTextPaths) RenderText(text *Text, matrix Matrix) {
-	text.RenderTo(r, matrix, 0)
+	text.RenderTo(r, matrix, r.resolution)
 }
 
 func (r clippedTextPaths) RenderImage(img image.Image, matrix Matrix) {

@@ -19,6 +19,39 @@ import (
 	"github.com/tdewolff/test"
 )
 
+func TestPathIsAxisAlignedRect(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		path *Path
+		want bool
+	}{
+		{"nil", nil, false},
+		{"empty", NewPathFromData(nil), false},
+		{"rectangle", Rectangle(4, 6), true},
+		{"translated", Rectangle(4, 6).Translate(2, -3), true},
+		{"clockwise", Rectangle(4, 6).Reverse(), true},
+		{"explicit_closing_edge", MustParseSVGPath("M0 0 L4 0 L4 6 L0 6 L0 0 Z"), true},
+		{"open", MustParseSVGPath("M0 0 L4 0 L4 6 L0 6"), false},
+		{"degenerate", MustParseSVGPath("M0 0 L4 0 L0 0 Z"), false},
+		{"diagonal", Rectangle(4, 6).Rotate(20), false},
+		{"near_rectangle", MustParseSVGPath("M0 0 L4 0 L4.00001 6 L0 6 Z"), false},
+		{"curve", MustParseSVGPath("M0 0 L4 0 Q5 3 4 6 L0 6 Z"), false},
+		{"concave", MustParseSVGPath("M0 0 L4 0 L4 2 L2 2 L2 6 L0 6 Z"), false},
+		{"hole", Rectangle(4, 6).Append(Rectangle(1, 1).Translate(1, 1).Reverse()), false},
+		{"extra_subpath", Rectangle(4, 6).Append(Rectangle(1, 1).Translate(8, 8)), false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := testCase.path.IsAxisAlignedRect(); got != testCase.want {
+				t.Fatalf("IsAxisAlignedRect() = %v, want %v", got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestPathEmpty(t *testing.T) {
 	p := &Path{}
 	test.That(t, p.Empty())

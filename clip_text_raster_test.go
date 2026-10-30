@@ -1,11 +1,59 @@
 package canvas_test
 
 import (
+	"bytes"
+	"fmt"
+	"image"
 	"testing"
 
 	"github.com/zc310/canvas"
 	"github.com/zc310/canvas/renderers/rasterizer"
 )
+
+func TestClippedTextFallbackUsesRasterResolution(t *testing.T) {
+	t.Parallel()
+
+	for _, dpi := range []float64{72, 96, 150, 300} {
+		t.Run(fmt.Sprintf("DPI=%g", dpi), func(t *testing.T) {
+			t.Parallel()
+
+			family := canvas.NewFontFamily("clip-resolution")
+
+			err := family.LoadFontFile("resources/DejaVuSerif.ttf", canvas.FontRegular)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			resolution := canvas.DPI(dpi)
+			dpmm := resolution.DPMM()
+			line := canvas.NewTextLine(family.Face(18*72/dpi, canvas.Black), "OOOO", canvas.Left)
+			matrix := canvas.Identity.Translate(5.37/dpmm, 35.13/dpmm)
+			clip := canvas.Rectangle(200/dpmm, 100/dpmm).Transform(matrix.Inv())
+			plain := canvas.New(200/dpmm, 100/dpmm)
+			plain.RenderText(line, matrix)
+			want := rasterizer.Draw(plain, resolution, canvas.DefaultColorSpace)
+
+			for _, context := range []bool{false, true} {
+				got := image.NewRGBA(want.Bounds())
+				raster := rasterizer.FromImage(got, resolution, canvas.DefaultColorSpace)
+
+				if context {
+					canvas.NewContext(canvas.NewContext(raster)).RenderClippedText(line, matrix, clip)
+				} else {
+					page := canvas.New(200/dpmm, 100/dpmm)
+					page.RenderClippedText(line, matrix, clip)
+					page.RenderTo(raster)
+				}
+
+				raster.Close()
+
+				if !bytes.Equal(got.Pix, want.Pix) {
+					t.Fatalf("context=%v: clipping changed device-aligned text pixels", context)
+				}
+			}
+		})
+	}
+}
 
 func TestClippedTextFallbackPixelsPreserveGlyphHoles(t *testing.T) {
 	t.Parallel()

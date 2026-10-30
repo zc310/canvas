@@ -96,6 +96,12 @@ func (r *Rasterizer) Size() (float64, float64) {
 	return float64(size.X) / r.resolution.DPMM(), float64(size.Y) / r.resolution.DPMM()
 }
 
+// Resolution returns the device resolution used for text hinting and pixel alignment,
+// including when canvas falls back to clipped glyph outlines.
+func (r *Rasterizer) Resolution() canvas.Resolution {
+	return r.resolution
+}
+
 // RenderPath renders a path to the canvas using a style and a transformation matrix.
 func (r *Rasterizer) RenderPath(path *canvas.Path, style canvas.Style, m canvas.Matrix) {
 	bounds := canvas.Rect{}

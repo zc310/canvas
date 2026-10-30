@@ -86,7 +86,10 @@ func TestClippedTextFallbackBoundsOnlySkipsSafeIntersections(t *testing.T) {
 			t.Parallel()
 
 			target := &clippedPathCapture{Canvas: New(20, 20)}
-			r := clippedTextPaths{Renderer: target, clip: tc.clip, bounds: tc.clip.Bounds(), rectangle: clippedTextRectangle(tc.clip)}
+			r := clippedTextPaths{
+				Renderer: target, clip: tc.clip, bounds: tc.clip.Bounds(),
+				rectangle: tc.clip.IsAxisAlignedRect(), resolution: 0,
+			}
 			r.RenderPath(path, DefaultStyle, Identity)
 			if (target.path == nil) != tc.empty {
 				t.Fatalf("empty result=%v, want %v", target.path == nil, tc.empty)
